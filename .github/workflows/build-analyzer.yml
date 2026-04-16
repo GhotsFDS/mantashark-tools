@@ -1,0 +1,156 @@
+name: Build Analyzer EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/log_analyzer/analyze_log.py'
+      - 'tools/log_analyzer/web_analyzer.py'
+      - '.github/workflows/build-analyzer.yml'
+  workflow_dispatch:  # 允许手动触发
+  release:
+    types: [created]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink matplotlib pyinstaller flask
+
+      - name: Build CLI analyzer
+        run: |
+          cd tools/log_analyzer
+          pyinstaller --onefile `
+            --name analyze_log `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.DFReader `
+            --collect-submodules pymavlink `
+            --noconfirm `
+            analyze_log.py
+
+      - name: Build Web analyzer
+        run: |
+          cd tools/log_analyzer
+          pyinstaller --onefile `
+            --name analyze_log_web `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.DFReader `
+            --hidden-import flask `
+            --collect-submodules pymavlink `
+            --collect-submodules flask `
+            --noconfirm `
+            web_analyzer.py
+
+      - name: Verify build
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          cd tools/log_analyzer
+          dir dist
+          if (Test-Path "dist\analyze_log.exe") {
+            $size = (Get-Item "dist\analyze_log.exe").Length / 1MB
+            Write-Host ("✓ analyze_log.exe: {0:N1} MB" -f $size)
+          } else {
+            throw "CLI EXE not found"
+          }
+          if (Test-Path "dist\analyze_log_web.exe") {
+            $size = (Get-Item "dist\analyze_log_web.exe").Length / 1MB
+            Write-Host ("✓ analyze_log_web.exe: {0:N1} MB" -f $size)
+          } else {
+            throw "Web EXE not found"
+          }
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze_log-windows
+          path: tools/log_analyzer/dist/analyze_log.exe
+          retention-days: 30
+
+      - name: Upload Web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze_log_web-windows
+          path: tools/log_analyzer/dist/analyze_log_web.exe
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/log_analyzer/dist/analyze_log.exe
+            tools/log_analyzer/dist/analyze_log_web.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink matplotlib pyinstaller flask
+
+      - name: Build CLI analyzer
+        run: |
+          cd tools/log_analyzer
+          pyinstaller --onefile \
+            --name analyze_log \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.DFReader \
+            --collect-submodules pymavlink \
+            --noconfirm \
+            analyze_log.py
+
+      - name: Build Web analyzer
+        run: |
+          cd tools/log_analyzer
+          pyinstaller --onefile \
+            --name analyze_log_web \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.DFReader \
+            --hidden-import flask \
+            --collect-submodules pymavlink \
+            --collect-submodules flask \
+            --noconfirm \
+            web_analyzer.py
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze_log-linux
+          path: tools/log_analyzer/dist/analyze_log
+          retention-days: 30
+
+      - name: Upload Web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: analyze_log_web-linux
+          path: tools/log_analyzer/dist/analyze_log_web
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/log_analyzer/dist/analyze_log
+            tools/log_analyzer/dist/analyze_log_web
