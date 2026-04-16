@@ -2364,15 +2364,22 @@ def find_mavproxy():
             os.path.join(project, 'sim', '.venv', 'bin', 'mavproxy'),
         ]
 
+    print(f"[MP FIND] sys.executable: {sys.executable}")
+    print(f"[MP FIND] exe_dir: {exe_dir}")
+    print(f"[MP FIND] 检查候选 ({len(candidates)}):")
     for c in candidates:
-        if os.path.isfile(c):
+        exists = os.path.isfile(c)
+        print(f"[MP FIND]   {'[OK]' if exists else '[NO]'} {c}")
+        if exists:
             return c
 
     # 3. PATH
     for name in ['mavproxy.py', 'mavproxy.exe', 'mavproxy']:
         found = shutil.which(name)
         if found:
+            print(f"[MP FIND] PATH 找到: {found}")
             return found
+    print(f"[MP FIND] PATH 查找 ['mavproxy.py','mavproxy.exe','mavproxy'] 都失败")
     return None
 
 
@@ -2380,24 +2387,51 @@ mavproxy_proc = None
 
 
 def mavproxy_healthcheck(exe):
-    """跑 mavproxy --help 确认没有 ImportError / 缺依赖. PyInstaller 打包首次解压 + 导入很慢 → 30s 超时"""
+    """跑 mavproxy --help 确认没有 ImportError / 缺依赖. PyInstaller 打包首次解压 + 导入很慢 → 60s 超时.
+    完整打印 stdout/stderr/returncode 方便排查."""
+    print(f"[MP HEALTHCHECK] 路径: {exe}")
+    print(f"[MP HEALTHCHECK] 文件存在: {os.path.isfile(exe)}, 大小: {os.path.getsize(exe) if os.path.isfile(exe) else 'N/A'}")
     try:
         if exe.endswith('.py'):
             cmd = [sys.executable, exe, '--help']
         else:
             cmd = [exe, '--help']
-        # PyInstaller one-file exe 首次运行解压 ~3-5s + MAVProxy 导入 ~5s, 给 30s
-        r = subprocess.run(cmd, capture_output=True, timeout=30, text=True, errors='ignore')
-        combined = (r.stdout or '') + (r.stderr or '')
+        print(f"[MP HEALTHCHECK] 执行: {' '.join(cmd)}")
+        t0 = time.time()
+        r = subprocess.run(cmd, capture_output=True, timeout=60, text=True, errors='ignore')
+        dt = time.time() - t0
+        print(f"[MP HEALTHCHECK] 用时 {dt:.1f}s  returncode={r.returncode}")
+        stdout = (r.stdout or '').strip()
+        stderr = (r.stderr or '').strip()
+        if stdout:
+            print(f"[MP HEALTHCHECK] --- stdout (前 500 字符) ---")
+            print(stdout[:500])
+        if stderr:
+            print(f"[MP HEALTHCHECK] --- stderr (前 800 字符) ---")
+            print(stderr[:800])
+        combined = stdout + '\n' + stderr
         if 'ModuleNotFoundError' in combined or 'No module named' in combined:
-            return False, combined.strip().split('\n')[-1]
-        if r.returncode != 0 and not combined.strip().lower().startswith('usage'):
-            return False, f'returncode={r.returncode}: {combined[:200]}'
+            # 挑出第一行 ModuleNotFound
+            for line in combined.split('\n'):
+                if 'ModuleNotFoundError' in line or 'No module named' in line:
+                    return False, line.strip()
+            return False, 'ModuleNotFoundError (详见上方输出)'
+        if r.returncode != 0 and not stdout.lower().startswith('usage'):
+            return False, f'returncode={r.returncode}'
         return True, None
-    except subprocess.TimeoutExpired:
-        return False, 'healthcheck timeout (30s). PyInstaller 首次运行很慢, 先手动双击一次 mavproxy.exe 预热'
+    except subprocess.TimeoutExpired as e:
+        print(f"[MP HEALTHCHECK] TIMEOUT 60s")
+        # 打印超时前已拿到的输出
+        if e.stdout:
+            out = e.stdout.decode('utf-8', errors='ignore') if isinstance(e.stdout, bytes) else e.stdout
+            print(f"[MP HEALTHCHECK] 超时前 stdout: {out[:500]}")
+        if e.stderr:
+            err = e.stderr.decode('utf-8', errors='ignore') if isinstance(e.stderr, bytes) else e.stderr
+            print(f"[MP HEALTHCHECK] 超时前 stderr: {err[:500]}")
+        return False, 'healthcheck timeout (60s). 可能是 PyInstaller 首次解压慢, 或 mavproxy 在等 stdin. 详见上方输出.'
     except Exception as e:
-        return False, str(e)
+        print(f"[MP HEALTHCHECK] EXCEPTION: {type(e).__name__}: {e}")
+        return False, f'{type(e).__name__}: {e}'
 
 
 def start_mavproxy(serial_port, baudrate, mp_port, gcs_port):
