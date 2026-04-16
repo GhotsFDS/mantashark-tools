@@ -2328,33 +2328,47 @@ def find_free_port(start=14551, tries=20):
 
 
 def find_mavproxy():
-    """查找 MAVProxy 可执行路径 (Windows/Linux 通用)"""
-    # 1. 尝试 venv 里的
+    """查找 MAVProxy 可执行路径 (Windows/Linux 通用)
+    优先级:
+      1. msk_gcs.exe 同目录的 mavproxy.exe (PyInstaller 打包场景)
+      2. venv (开发环境)
+      3. Python 解释器 Scripts 目录
+      4. PATH
+    """
+    import shutil
     try:
         here = os.path.dirname(os.path.abspath(__file__))
     except NameError:
         here = os.getcwd()
+
+    candidates = []
+
+    # 1. sys.executable 同目录 (PyInstaller 场景: msk_gcs.exe 和 mavproxy.exe 放一起)
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    if sys.platform == 'win32':
+        candidates += [os.path.join(exe_dir, 'mavproxy.exe')]
+    else:
+        candidates += [os.path.join(exe_dir, 'mavproxy')]
+
+    # 2. MSK_GCS 源码场景: venv
     project = os.path.dirname(os.path.dirname(here))
     if sys.platform == 'win32':
-        candidates = [
+        candidates += [
             os.path.join(project, 'sim', '.venv', 'Scripts', 'mavproxy.exe'),
             os.path.join(project, 'sim', '.venv', 'Scripts', 'mavproxy.py'),
+            os.path.join(exe_dir, 'Scripts', 'mavproxy.exe'),
         ]
     else:
-        candidates = [
+        candidates += [
             os.path.join(project, 'sim', '.venv', 'bin', 'mavproxy.py'),
+            os.path.join(project, 'sim', '.venv', 'bin', 'mavproxy'),
         ]
+
     for c in candidates:
         if os.path.isfile(c):
             return c
-    # 2. 尝试当前 Python 解释器同目录的 Scripts
-    scripts_dir = os.path.join(os.path.dirname(sys.executable), 'Scripts' if sys.platform == 'win32' else '')
-    for name in ['mavproxy.exe', 'mavproxy.py', 'mavproxy']:
-        p = os.path.join(scripts_dir, name)
-        if os.path.isfile(p):
-            return p
-    # 3. 尝试 PATH
-    import shutil
+
+    # 3. PATH
     for name in ['mavproxy.py', 'mavproxy.exe', 'mavproxy']:
         found = shutil.which(name)
         if found:
@@ -2366,14 +2380,14 @@ mavproxy_proc = None
 
 
 def mavproxy_healthcheck(exe):
-    """跑 mavproxy --help 确认没有 ImportError / 缺依赖. 5s 超时"""
+    """跑 mavproxy --help 确认没有 ImportError / 缺依赖. PyInstaller 打包首次解压 + 导入很慢 → 30s 超时"""
     try:
         if exe.endswith('.py'):
             cmd = [sys.executable, exe, '--help']
         else:
             cmd = [exe, '--help']
-        r = subprocess.run(cmd, capture_output=True, timeout=5, text=True, errors='ignore')
-        # 输出里有 ModuleNotFoundError / No module named 表示 PyInstaller 漏打包
+        # PyInstaller one-file exe 首次运行解压 ~3-5s + MAVProxy 导入 ~5s, 给 30s
+        r = subprocess.run(cmd, capture_output=True, timeout=30, text=True, errors='ignore')
         combined = (r.stdout or '') + (r.stderr or '')
         if 'ModuleNotFoundError' in combined or 'No module named' in combined:
             return False, combined.strip().split('\n')[-1]
@@ -2381,7 +2395,7 @@ def mavproxy_healthcheck(exe):
             return False, f'returncode={r.returncode}: {combined[:200]}'
         return True, None
     except subprocess.TimeoutExpired:
-        return False, 'healthcheck timeout'
+        return False, 'healthcheck timeout (30s). PyInstaller 首次运行很慢, 先手动双击一次 mavproxy.exe 预热'
     except Exception as e:
         return False, str(e)
 
