@@ -75,20 +75,18 @@ MSK_PARAMS = [
     "MSK_ATT_KP","MSK_AUTO_CH","MSK_AUTO_CUT","MSK_AUTO_TGT",
     "MSK_CHK_CH","MSK_CHK_GRP_MS","MSK_CHK_PWM","MSK_CHK_STOP",
     "MSK_GEAR_CH","MSK_GPS_TAU",
-    "MSK_KDF1","MSK_KDF2","MSK_KDF3",
-    "MSK_KDM1","MSK_KDM2","MSK_KDM3",
-    "MSK_KRD1","MSK_KRD2","MSK_KRD3",
-    "MSK_KS1","MSK_KS2","MSK_KS3",
-    "MSK_KT1","MSK_KT2","MSK_KT3",
-    "MSK_M1_KDF","MSK_M1_KDM","MSK_M1_KRD","MSK_M1_KS","MSK_M1_KT",
-    "MSK_M2_KDF","MSK_M2_KDM","MSK_M2_KRD","MSK_M2_KS","MSK_M2_KT",
-    "MSK_M3_KDF","MSK_M3_KDM","MSK_M3_KRD","MSK_M3_KS","MSK_M3_KT",
+    # 5 点曲线 Y 值 (0=起点, 1=V1, 2=V2, 3=V3, 4=V_MAX)
+    "MSK_KS0","MSK_KS1","MSK_KS2","MSK_KS3","MSK_KS4",
+    "MSK_KDF0","MSK_KDF1","MSK_KDF2","MSK_KDF3","MSK_KDF4",
+    "MSK_KDM0","MSK_KDM1","MSK_KDM2","MSK_KDM3","MSK_KDM4",
+    "MSK_KT0","MSK_KT1","MSK_KT2","MSK_KT3","MSK_KT4",
+    "MSK_KRD0","MSK_KRD1","MSK_KRD2","MSK_KRD3","MSK_KRD4",
     "MSK_MODE_CH","MSK_PIT_LIM","MSK_RAMP","MSK_RC_LIM","MSK_ROL_LIM",
     "MSK_TILT_CAL","MSK_TILT_DEG",
     "MSK_TILT_L_DIR","MSK_TILT_L_ZERO","MSK_TILT_R_DIR","MSK_TILT_R_ZERO",
     "MSK_TILT_SVL","MSK_TILT_SVR","MSK_TILT_TAU","MSK_TILT_USPD",
     "MSK_TILT_V1","MSK_TILT_V2","MSK_TILT_V3",
-    "MSK_V1","MSK_V2","MSK_V3","MSK_WING_OFS",
+    "MSK_V1","MSK_V2","MSK_V3","MSK_V_MAX","MSK_WING_OFS",
 ]
 
 # ─── MSK 日志解析 ───
@@ -408,7 +406,7 @@ h3:first-child{margin-top:0;}
 <!-- 顶部状态栏 -->
 <div class="top">
   <span class="title">MantaShark GCS</span>
-  <a href="/tuner" target="_blank" class="tuner-btn">调参工具</a>
+  <a href="/tuner" class="tuner-btn">调参工具</a>
   <span id="b_conn" class="badge b-off">DISCONNECTED</span>
   <span id="b_arm" class="badge b-off">DISARMED</span>
   <span id="b_mode" class="badge b-info">?</span>
@@ -660,18 +658,26 @@ TUNER_HTML = r"""<!DOCTYPE html>
 <title>MantaShark Mixer Tuner v7</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;overflow:hidden;}
 body{background:#1a1a2e;color:#e0e0e0;font-family:'Consolas',monospace;user-select:none;}
-.hdr{padding:6px 14px;background:#16213e;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;}
-.hdr h1{font-size:14px;color:#0ff;}
-.hdr button{margin-left:6px;padding:3px 10px;background:#0a3d62;color:#ddd;border:1px solid #0ff3;cursor:pointer;font-size:11px;border-radius:2px;}
+.hdr{min-height:36px;padding:4px 12px;background:#16213e;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;flex-shrink:0;}
+.hdr h1{font-size:13px;color:#0ff;white-space:nowrap;}
+.hdr .btns{display:flex;flex-wrap:wrap;gap:4px;}
+.hdr button{padding:3px 8px;background:#0a3d62;color:#ddd;border:1px solid #0ff3;cursor:pointer;font-size:11px;border-radius:2px;white-space:nowrap;}
 .hdr button:hover{background:#0ff3;}
-.wrap{display:flex;height:calc(100vh - 32px);}
+.wrap{display:flex;height:calc(100vh - 40px);min-height:400px;}
 .mid{flex:1;display:flex;flex-direction:column;min-width:0;}
-.pMotor{flex:3;min-height:0;}
-.pSlider{height:44px;flex-shrink:0;background:#0d1b2a;border-top:1px solid #333;border-bottom:1px solid #333;overflow:hidden;}
-.pCurve{flex:5;min-height:0;}
+/* 俯视图比重加大 (flex 3→5), 曲线稍缩 (5→4); 整个 .mid 被 .sb 加宽挤窄 */
+.pMotor{flex:5;min-height:220px;}
+.pSlider{height:64px;flex-shrink:0;background:#0d1b2a;border-top:1px solid #333;border-bottom:1px solid #333;overflow:hidden;}
+.pCurve{flex:4;min-height:200px;}
 canvas{display:block;width:100%;height:100%;}
-.sb{width:240px;flex-shrink:0;background:#16213e;padding:8px;overflow-y:auto;border-left:1px solid #333;font-size:11px;}
+.sb{width:300px;flex-shrink:0;background:#16213e;padding:8px;overflow-y:auto;border-left:1px solid #333;font-size:11px;}
+@media (max-width:900px){
+  .sb{width:200px;font-size:10px;}
+  .hdr h1{font-size:11px;}
+  .hdr button{padding:2px 5px;font-size:10px;}
+}
 .sb h3{color:#0ff;margin:8px 0 3px;font-size:11px;border-bottom:1px solid #333;padding-bottom:2px;}
 .pr{display:flex;justify-content:space-between;align-items:center;margin:2px 0;}
 .pr label{color:#aaa;font-size:10px;flex:1;}
@@ -700,14 +706,16 @@ canvas{display:block;width:100%;height:100%;}
 </head>
 <body>
 <div class="hdr">
-  <h1>MantaShark Mixer Tuner v7</h1>
-  <div>
+  <h1>
+    <a href="/" style="color:#0ff;text-decoration:none;margin-right:4px;" title="返回 Dashboard">←</a>
+    Mixer Tuner v7
+  </h1>
+  <div class="btns">
     <button onclick="doImport()">Import</button>
     <button onclick="doExport()">Export</button>
     <button onclick="doSave()">Save</button>
     <button onclick="doReset()">Reset</button>
-    <span id="fc_buttons" style="display:none; margin-left:8px;">
-      <span style="color:#0f0;font-size:10px;margin-right:4px;">● 飞控在线</span>
+    <span id="fc_buttons" style="display:none;">
       <button onclick="readFromFC()" style="background:#0a5;color:#fff;">读取飞控</button>
       <button onclick="writeToFC()" style="background:#c60;color:#fff;">写入飞控</button>
     </span>
@@ -720,14 +728,15 @@ canvas{display:block;width:100%;height:100%;}
     <div class="pCurve"><canvas id="cC"></canvas></div>
   </div>
   <div class="sb" id="sb">
-    <h3>模式1 水面机动 (固定系数)</h3>
-    <div class="mode-row"><label>KS</label><input id="m1_ks" type="number" step="0.05" value="0.55">
-      <label>KDF</label><input id="m1_kdf" type="number" step="0.05" value="0.65">
-      <label>KDM</label><input id="m1_kdm" type="number" step="0.05" value="0.55"></div>
-    <div class="mode-row"><label>KT</label><input id="m1_kt" type="number" step="0.05" value="0.15">
-      <label>KRD</label><input id="m1_krd" type="number" step="0.05" value="0.55"></div>
+    <div style="font-size:11px;color:#99a3b8;margin-bottom:8px;padding:6px;background:#0a0d22;border-radius:4px;">
+      NOGPS/MODE2 各档读曲线的前 3 个 y:
+      <span style="color:#0ff">G1→起点</span>
+      <span style="color:#ff0">G2→V1 点</span>
+      <span style="color:#f80">G3→V2 点</span>。
+      直接在下方曲线调。顶部速度条拖 V1/V2/V3 标记可改断点。
+    </div>
 
-    <h3>模式2 飞行曲线</h3>
+    <h3>飞行曲线 (5 点)</h3>
     <div class="pr"><label>显示速度上限 (m/s)</label><input id="i_vmax" type="number" step="5" value="20" min="10" max="60"></div>
     <div class="pr"><label>档位预览 GEAR</label>
       <select id="i_gear" onchange="onGearChange()"></select></div>
@@ -1105,11 +1114,15 @@ function setupCv(id){
 function drawMotors(){
   let{ctx,w,h}=setupCv('cM');
   ctx.clearRect(0,0,w,h);
-  let cx=w/2,cy=h*0.48,sc=Math.min(w*0.85,h*0.85);
+  // 面板中心放 cy=h/2, 减小 body offset 从 0.42 到 0.15, 让 sc 可以更大
+  // 电机 y 范围 [-0.55, +0.65]*sc + 0.15sc = [-0.55, +0.65]*sc 相对 cy
+  // 约束 sc ≤ 0.77*h, 取 0.75 保余量. 面板加高后电机可见更大.
+  let cx=w/2,cy=h*0.5,sc=Math.min(w*0.85, h*0.75);
+  const BODY_OFS = 0.15;  // 原 0.42, 减小让电机绘制区域更靠上
   ctx.save();ctx.translate(cx,cy);
 
-  let frontY=-0.80*sc+sc*0.42, midY=-0.50*sc+sc*0.42;
-  let rearY=-0.10*sc+sc*0.42, tailY=-0.08*sc+sc*0.42;
+  let frontY=-0.80*sc+sc*BODY_OFS, midY=-0.50*sc+sc*BODY_OFS;
+  let rearY=-0.10*sc+sc*BODY_OFS, tailY=-0.08*sc+sc*BODY_OFS;
   let frontHW=0.33*sc, midHW=0.52*sc, rearHW=0.46*sc, tailHW=0.10*sc;
   ctx.beginPath();
   ctx.moveTo(-frontHW,frontY);ctx.lineTo(frontHW,frontY);
@@ -1129,7 +1142,7 @@ function drawMotors(){
   ctx.fillText('FRONT',0,frontY-16);
 
   for(let m of ML){
-    let mx=m.x*sc, my=-m.y*sc+sc*0.42;
+    let mx=m.x*sc, my=-m.y*sc+sc*BODY_OFS;
     let thr=motorThrNorm(m,speed);
     let rad=6+thr*12, col=CC[GK[m.g]];
 
@@ -1153,10 +1166,7 @@ function drawMotors(){
     ctx.fillText((thr*100).toFixed(0)+'%',mx,my+rad+9);
   }
 
-  let modeStr=showMode===1?'NOGPS':'GPS';
-  let gearStr=showMode===2?(gear<nPts?`G${gear}(\u2264${V[gear-1]}m/s)`:`G${gear}(FULL)`):'';
-  ctx.fillStyle='#0ff';ctx.font='11px monospace';ctx.textAlign='left';
-  ctx.fillText(`Mode:${modeStr}  Speed:${speed.toFixed(1)}m/s  ${gearStr}`,-sc*0.44,sc*0.47);
+  // (原来这里画 Mode:X Speed:Y G_(FULL) 叠在 RDL 位置, 已移到速度条面板避免遮挡)
   ctx.restore();
 
   // ─── 力平衡显示（右上角）───
@@ -1223,33 +1233,38 @@ function drawMotors(){
 function drawSlider(){
   let{ctx,w,h}=setupCv('cS');
   ctx.clearRect(0,0,w,h);
-  let pad=24,by=h*0.4,bh=8,bL=pad,bR=w-pad,bW=bR-bL;
+  let pad=24,by=h*0.55,bh=10,bL=pad,bR=w-pad,bW=bR-bL;
+
+  // Title hint above bar
+  ctx.fillStyle='#88a';ctx.font='11px monospace';ctx.textAlign='center';
+  ctx.fillText('速度条 — 拖 V1/V2/V3 标记改断点, 空白处拖指针预览',w/2,12);
+
+  // Mode indicator (center)
+  ctx.fillStyle=showMode===1?'#0f0':'#ff0';ctx.font='10px monospace';ctx.textAlign='center';
+  ctx.fillText(showMode===1?'[N] NOGPS':'[G] GPS  (按 N/G 切换)',w/2,26);
 
   // Background bar
   ctx.fillStyle='#182a40';ctx.fillRect(bL,by-bh/2,bW,bh);
 
-  // V breakpoint markers
+  // V breakpoint markers (粗竖线 + 底部标签)
   for(let i=0;i<nPts;i++){
     let vx=bL+(V[i]/MAX_SPEED)*bW;
-    ctx.beginPath();ctx.setLineDash([2,2]);ctx.moveTo(vx,by-bh-2);ctx.lineTo(vx,by+bh+2);
-    ctx.strokeStyle='#fff6';ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
-    ctx.fillStyle='#aaa';ctx.font='8px monospace';ctx.textAlign='center';
-    ctx.fillText('V'+(i+1)+' '+V[i].toFixed(0),vx,by+bh+10);
+    ctx.beginPath();ctx.setLineDash([2,2]);
+    ctx.moveTo(vx,by-bh);ctx.lineTo(vx,by+bh);
+    ctx.strokeStyle='#0ff';ctx.lineWidth=2;ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle='#0ff';ctx.font='10px monospace';ctx.textAlign='center';
+    ctx.fillText('V'+(i+1)+' '+V[i].toFixed(1),vx,by+bh+12);
   }
 
-  // Speed indicator
+  // Speed indicator (当前速度, 橙色三角)
   let sx=bL+(speed/MAX_SPEED)*bW;
-  ctx.beginPath();ctx.moveTo(sx,by-bh-1);ctx.lineTo(sx,by+bh+1);
-  ctx.strokeStyle='#0ff';ctx.lineWidth=2;ctx.stroke();
+  ctx.fillStyle='#ff6600';
+  ctx.beginPath();ctx.moveTo(sx,by-bh-2);ctx.lineTo(sx-4,by-bh-8);ctx.lineTo(sx+4,by-bh-8);ctx.closePath();ctx.fill();
 
-  // Mode indicator
-  ctx.fillStyle='#555';ctx.font='8px monospace';
-  ctx.textAlign='left';ctx.fillText('0',bL,by+bh+10);
-  ctx.textAlign='right';ctx.fillText(MAX_SPEED+' m/s',bR,by+bh+10);
-
-  // Mode toggle hint
-  ctx.fillStyle=showMode===1?'#0f0':'#ff0';ctx.font='9px monospace';ctx.textAlign='center';
-  ctx.fillText(showMode===1?'[N] NOGPS':'[G] GPS  (按N/G切换)',bL+bW/2,by-bh-6);
+  // 0 / MAX 标签
+  ctx.fillStyle='#777';ctx.font='9px monospace';
+  ctx.textAlign='left';ctx.fillText('0',bL,by+bh+12);
+  ctx.textAlign='right';ctx.fillText(MAX_SPEED.toFixed(0)+' m/s',bR,by+bh+12);
 }
 
 // ========== CURVE VIEW ==========
@@ -1431,18 +1446,60 @@ function readV(){
   V[0]=parseFloat(document.getElementById('i_v1').value)||4;
   V[1]=parseFloat(document.getElementById('i_v2').value)||8;
   V[2]=parseFloat(document.getElementById('i_v3').value)||18;
+  // 约束单调递增
+  if(V[1]<=V[0]) V[1]=V[0]+0.5;
+  if(V[2]<=V[1]) V[2]=V[1]+0.5;
+  // 5 点曲线: 同步曲线点 x
+  for(let key of CURVE_KEYS){
+    let pts=CV[key].pts;
+    if(pts.length>=5){
+      pts[1].x=V[0]; pts[2].x=V[1]; pts[3].x=V[2];
+      pts[0].x=0; pts[4].x=MAX_SPEED;
+    }
+  }
 }
 
 // ========== SLIDER INTERACTION ==========
+// 左键空白处: 拖速度指针; 点近 V1/V2/V3 标记(10px 内): 拖该断点 (改 MSK_V*)
 (function(){
-  let cv=document.getElementById('cS'),dragging=false;
-  cv.onmousedown=e=>{dragging=true;mv(e);};
-  cv.onmousemove=e=>{if(dragging)mv(e);};
-  cv.onmouseup=cv.onmouseleave=()=>{dragging=false;};
+  let cv=document.getElementById('cS'),mode=null;  // mode=null|'speed'|{vi:0|1|2}
+  cv.onmousedown=e=>{
+    let rect=cv.getBoundingClientRect(),pad=24;
+    let bW=rect.width-pad*2;
+    let mx=e.clientX-rect.left-pad;
+    // 查最近 V 标记
+    let bestVi=null,bestD=12;
+    for(let i=0;i<3;i++){
+      let vx=V[i]/MAX_SPEED*bW;
+      let d=Math.abs(mx-vx);
+      if(d<bestD){bestD=d;bestVi=i;}
+    }
+    mode = bestVi!==null ? {vi:bestVi} : 'speed';
+    mv(e);
+  };
+  cv.onmousemove=e=>{if(mode)mv(e);};
+  cv.onmouseup=cv.onmouseleave=()=>{mode=null;};
   function mv(e){
     let rect=cv.getBoundingClientRect(),pad=24;
     let bW=rect.width-pad*2;
-    speed=cl((e.clientX-rect.left-pad)/bW*MAX_SPEED,0,MAX_SPEED);
+    let vx=cl((e.clientX-rect.left-pad)/bW*MAX_SPEED,0,MAX_SPEED);
+    if(mode==='speed'){
+      speed=vx;
+    } else if(mode && mode.vi!=null){
+      // 约束 V1<V2<V3, 最小间隔 0.5
+      let i=mode.vi;
+      let lo = i===0 ? 0.1 : V[i-1]+0.5;
+      let hi = i===2 ? MAX_SPEED-0.5 : V[i+1]-0.5;
+      V[i] = cl(vx, lo, hi);
+      // 同步到输入框 + 让曲线 5 个点的 x 重新锁到新 V
+      document.getElementById('i_v'+(i+1)).value=V[i].toFixed(1);
+      for(let key of CURVE_KEYS){
+        let pts=CV[key].pts;
+        if(pts[1]) pts[1].x=V[0];
+        if(pts[2]) pts[2].x=V[1];
+        if(pts[3]) pts[3].x=V[2];
+      }
+    }
     redraw();
   }
 })();
@@ -1450,11 +1507,11 @@ function readV(){
 // ========== MOTOR CLICK ==========
 document.getElementById('cM').addEventListener('click',e=>{
   let cv=e.target,rect=cv.getBoundingClientRect();
-  let mx=e.clientX-rect.left-rect.width/2,my=e.clientY-rect.top-rect.height*0.48;
-  let sc=Math.min(rect.width*0.85,rect.height*0.85);
+  let mx=e.clientX-rect.left-rect.width/2,my=e.clientY-rect.top-rect.height*0.5;
+  let sc=Math.min(rect.width*0.85,rect.height*0.75);
   let best=null,bestD=20;
   for(let m of ML){
-    let px=m.x*sc,py=-m.y*sc+sc*0.42;
+    let px=m.x*sc,py=-m.y*sc+sc*0.15;
     let d=Math.hypot(mx-px,my-py);
     if(d<bestD){bestD=d;best=m;}
   }
@@ -1510,48 +1567,8 @@ document.getElementById('cM').addEventListener('click',e=>{
     }
   };
 
-  // Double click → add node to nearest curve
-  cv.ondblclick=e=>{
-    if(!CT||curveTab!=='throttle')return;
-    let rect=cv.getBoundingClientRect();
-    let mx=e.clientX-rect.left,my=e.clientY-rect.top;
-    let spd=CT.fxSpd(mx);
-    for(let key of CURVE_KEYS){
-      let v=evalCV(key,spd);
-      if(Math.abs(my-CT.ty(v))<12){
-        let c=CV[key];
-        for(let i=0;i<c.pts.length-1;i++){
-          if(spd>c.pts[i].x+0.5&&spd<c.pts[i+1].x-0.5){
-            c.pts.splice(i+1,0,{x:spd,y:v});
-            let oldBend=c.bends[i];
-            c.bends.splice(i,1,oldBend*0.5,oldBend*0.5);
-            redraw();toast('Added node to '+key);
-            return;
-          }
-        }
-      }
-    }
-  };
-
-  // Right click → remove node (not first or last)
-  cv.oncontextmenu=e=>{
-    e.preventDefault();
-    if(!CT||curveTab!=='throttle')return;
-    let rect=cv.getBoundingClientRect();
-    let mx=e.clientX-rect.left,my=e.clientY-rect.top;
-    for(let key of CURVE_KEYS){
-      let c=CV[key];
-      for(let j=1;j<c.pts.length-1;j++){
-        if(Math.hypot(mx-CT.tx(c.pts[j].x),my-CT.ty(c.pts[j].y))<10){
-          c.pts.splice(j,1);
-          let merged=(c.bends[j-1]+c.bends[j])*0.5;
-          c.bends.splice(j-1,2,merged);
-          redraw();toast('Removed node from '+key);
-          return;
-        }
-      }
-    }
-  };
+  // 5 点固定, 禁用 dblclick 加点 / 右键删点
+  cv.oncontextmenu=e=>{ e.preventDefault(); };
 
   cv.onmousedown=e=>{
     if(curveTab==='geom'){geomDown(e);return;}
@@ -1595,15 +1612,11 @@ document.getElementById('cM').addEventListener('click',e=>{
 
   function mvCurve(e){
     let rect=cv.getBoundingClientRect();
-    let mx=e.clientX-rect.left,my=e.clientY-rect.top;
+    let my=e.clientY-rect.top;
     if(drag.type==='pt'){
+      // 5 点曲线: x 锁定在 [0, V1, V2, V3, MAX_SPEED], 只调 y
       let c=CV[drag.key],pt=c.pts[drag.j];
       pt.y=cl(CT.fyVal(my),0,1);
-      // Interior points: X also draggable
-      if(drag.j>0&&drag.j<c.pts.length-1){
-        let newX=CT.fxSpd(mx);
-        pt.x=cl(newX,c.pts[drag.j-1].x+0.3,c.pts[drag.j+1].x-0.3);
-      }
     } else if(drag.type==='bend'){
       let c=CV[drag.key],i=drag.seg;
       let linMid=lp(c.pts[i].y,c.pts[i+1].y,0.5);
@@ -1655,11 +1668,9 @@ function updateDetail(){
 // ========== SIDEBAR SYNC ==========
 document.querySelectorAll('.sb input, .sb select').forEach(inp=>{
   inp.addEventListener('change',()=>{
-    M1.KS=parseFloat(document.getElementById('m1_ks').value)||0;
-    M1.KDF=parseFloat(document.getElementById('m1_kdf').value)||0;
-    M1.KDM=parseFloat(document.getElementById('m1_kdm').value)||0;
-    M1.KT=parseFloat(document.getElementById('m1_kt').value)||0;
-    M1.KRD=parseFloat(document.getElementById('m1_krd').value)||0;
+    // M1.* 已从曲线读 (NOGPS 档位直接读曲线 K*0/1/2), 这里保持从曲线同步
+    M1.KS=CV.KS.pts[0].y; M1.KDF=CV.KDF.pts[0].y; M1.KDM=CV.KDM.pts[0].y;
+    M1.KT=CV.KT.pts[0].y; M1.KRD=CV.KRD.pts[0].y;
     readV();syncGearDropdown();
     tiltMax=parseFloat(document.getElementById('i_tm').value)||30;
     let newMax=parseFloat(document.getElementById('i_vmax').value)||20;
@@ -1694,29 +1705,23 @@ function onFile(e){
       l=l.replace(/#.*/,'').trim();if(!l)return;
       let[k,v]=l.split(',');if(k&&v)ps[k.trim()]=parseFloat(v.trim());
     });
-    // Mode 1
-    if(ps.MSK_M1_KS!==undefined) M1.KS=ps.MSK_M1_KS;
-    if(ps.MSK_M1_KDF!==undefined) M1.KDF=ps.MSK_M1_KDF;
-    if(ps.MSK_M1_KDM!==undefined) M1.KDM=ps.MSK_M1_KDM;
-    if(ps.MSK_M1_KT!==undefined) M1.KT=ps.MSK_M1_KT;
-    if(ps.MSK_M1_KRD!==undefined) M1.KRD=ps.MSK_M1_KRD;
-    // Breakpoints (固定 N_PTS=3)
+    // 断点
     nPts=N_PTS;
     if(ps.MSK_V1!==undefined) V[0]=ps.MSK_V1;
     if(ps.MSK_V2!==undefined) V[1]=ps.MSK_V2;
     if(ps.MSK_V3!==undefined) V[2]=ps.MSK_V3;
+    if(ps.MSK_V_MAX!==undefined) MAX_SPEED=ps.MSK_V_MAX;
     // Rebuild visual curves from imported V/Y values
     const YM={KS:'KS',KDF:'KDF',KDM:'KDM',KT:'KT',KRD:'KRD'};
     for(let[ck,pk] of Object.entries(YM)){
       let ys=[];
-      for(let i=0;i<3;i++){
-        let pn=`MSK_${pk}${i+1}`;
-        ys.push(ps[pn]!==undefined?ps[pn]:(CV[ck].pts[0]?CV[ck].pts[0].y:0.5));
+      for(let i=0;i<5;i++){
+        let pn=`MSK_${pk}${i}`;
+        ys.push(ps[pn]!==undefined?ps[pn]:(CV[ck].pts[i]?CV[ck].pts[i].y:0.5));
       }
-      // Build pts: endpoint at 0 + V breakpoints + endpoint at MAX_SPEED
-      let pts=[{x:0,y:ys[0]}];
-      for(let i=0;i<3;i++) pts.push({x:V[i],y:ys[i]});
-      pts.push({x:MAX_SPEED,y:ys[2]});
+      let xs=[0, V[0], V[1], V[2], MAX_SPEED];
+      let pts=[];
+      for(let i=0;i<5;i++) pts.push({x:xs[i], y:ys[i]});
       CV[ck]=mkCurve(pts);
     }
     if(ps.MSK_RAMP!==undefined) document.getElementById('i_rmp').value=ps.MSK_RAMP;
@@ -1750,9 +1755,6 @@ function onFile(e){
     if(ps.MSK_TILT_V2!==undefined) document.getElementById('i_tv2').value=ps.MSK_TILT_V2;
     if(ps.MSK_TILT_V3!==undefined) document.getElementById('i_tv3').value=ps.MSK_TILT_V3;
     // Sync UI
-    document.getElementById('m1_ks').value=M1.KS;document.getElementById('m1_kdf').value=M1.KDF;
-    document.getElementById('m1_kdm').value=M1.KDM;document.getElementById('m1_kt').value=M1.KT;
-    document.getElementById('m1_krd').value=M1.KRD;
     document.getElementById('i_v1').value=V[0];document.getElementById('i_v2').value=V[1];
     document.getElementById('i_v3').value=V[2];
     syncGearDropdown();redraw();toast('Imported');
@@ -1762,31 +1764,18 @@ function onFile(e){
 
 // ========== EXPORT ==========
 function doExport(){
-  let L=['# MantaShark v7 Mixer Parameters','# 可直接导入 Mission Planner',''];
-  // Mode 1
-  L.push(`MSK_M1_KS,${M1.KS.toFixed(2)}`);
-  L.push(`MSK_M1_KDF,${M1.KDF.toFixed(2)}`);
-  L.push(`MSK_M1_KDM,${M1.KDM.toFixed(2)}`);
-  L.push(`MSK_M1_KT,${M1.KT.toFixed(2)}`);
-  L.push(`MSK_M1_KRD,${M1.KRD.toFixed(2)}`);
-  L.push('');
-  // Breakpoints (固定 N_PTS=3)
-  L.push(`MSK_N_PTS,3`);
+  let L=['# MantaShark v7 Mixer Parameters (5-point curve)','# 可直接导入 Mission Planner',''];
+  // 速度断点
   L.push(`MSK_V1,${V[0].toFixed(1)}`);
   L.push(`MSK_V2,${V[1].toFixed(1)}`);
   L.push(`MSK_V3,${V[2].toFixed(1)}`);
+  L.push(`MSK_V_MAX,${MAX_SPEED.toFixed(1)}`);
   L.push('');
-  // Curve Y values + Expo (sampled from visual curves at V breakpoints)
+  // 5 点 Y (K*0..K*4 每组 5 个)
   const YM={KS:'KS',KDF:'KDF',KDM:'KDM',KT:'KT',KRD:'KRD'};
-  const EM={KS:'CS',KDF:'CDF',KDM:'CDM',KT:'CT',KRD:'CRD'};
   for(let[ck,pk] of Object.entries(YM)){
-    let s=sampleForExport(ck);
-    for(let i=0;i<3;i++) L.push(`MSK_${pk}${i+1},${s.y[i].toFixed(2)}`);
-  }
-  L.push('');
-  for(let[ck,pk] of Object.entries(EM)){
-    let s=sampleForExport(ck);
-    for(let i=0;i<2;i++) L.push(`MSK_${pk}${i+1},${s.expo[i].toFixed(2)}`);
+    let pts=CV[ck].pts;
+    for(let i=0;i<5;i++) L.push(`MSK_${pk}${i},${(pts[i]?pts[i].y:0).toFixed(3)}`);
   }
   L.push('');
   // Control
@@ -1855,9 +1844,6 @@ function doReset(){
     10:{r:0,p:0,y:-.50},11:{r:0,p:0,y:-.36},
     12:{r:0,p:-.5,y:0}, 13:{r:0,p:-.5,y:0}};
   speed=0;selMot=null;showMode=2;tiltMax=30;
-  document.getElementById('m1_ks').value='0.55';document.getElementById('m1_kdf').value='0.65';
-  document.getElementById('m1_kdm').value='0.55';document.getElementById('m1_kt').value='0.15';
-  document.getElementById('m1_krd').value='0.55';
   document.getElementById('i_vmax').value='20';
   document.getElementById('i_v1').value='4';document.getElementById('i_v2').value='8';
   document.getElementById('i_v3').value='14';
@@ -1926,9 +1912,7 @@ function applyState(s){
   nPts=s.nPts; V=s.V; CV=s.CV; M1=s.M1; GEOM=s.GEOM;
   gear=s.gear||3; tiltMax=s.tiltMax||30;
   if(s.MAX_SPEED) MAX_SPEED=s.MAX_SPEED;
-  document.getElementById('m1_ks').value=M1.KS;document.getElementById('m1_kdf').value=M1.KDF;
-  document.getElementById('m1_kdm').value=M1.KDM;document.getElementById('m1_kt').value=M1.KT;
-  document.getElementById('m1_krd').value=M1.KRD;
+  // M1.* 从曲线同步, UI 没有单独输入框了
   document.getElementById('i_vmax').value=MAX_SPEED;
   document.getElementById('i_v1').value=V[0];document.getElementById('i_v2').value=V[1];
   document.getElementById('i_v3').value=V[2];
@@ -1990,27 +1974,27 @@ function checkOnlineMode(){
 
 function applyParamsFromDict(ps){
   // 与 onFile 中解析后的逻辑相同: ps = {MSK_V2: 8.0, ...}
-  if(ps.MSK_M1_KS!==undefined) M1.KS=ps.MSK_M1_KS;
-  if(ps.MSK_M1_KDF!==undefined) M1.KDF=ps.MSK_M1_KDF;
-  if(ps.MSK_M1_KDM!==undefined) M1.KDM=ps.MSK_M1_KDM;
-  if(ps.MSK_M1_KT!==undefined) M1.KT=ps.MSK_M1_KT;
-  if(ps.MSK_M1_KRD!==undefined) M1.KRD=ps.MSK_M1_KRD;
   nPts=N_PTS;
   if(ps.MSK_V1!==undefined) V[0]=ps.MSK_V1;
   if(ps.MSK_V2!==undefined) V[1]=ps.MSK_V2;
   if(ps.MSK_V3!==undefined) V[2]=ps.MSK_V3;
+  if(ps.MSK_V_MAX!==undefined) MAX_SPEED=ps.MSK_V_MAX;
+  // 5 点曲线: 起点(0) / V1 / V2 / V3 / 终点(V_MAX), 每点 y 独立 (KS0..KS4 等)
   const YM={KS:'KS',KDF:'KDF',KDM:'KDM',KT:'KT',KRD:'KRD'};
   for(let[ck,pk] of Object.entries(YM)){
     let ys=[];
-    for(let i=0;i<3;i++){
-      let pn=`MSK_${pk}${i+1}`;
-      ys.push(ps[pn]!==undefined?ps[pn]:(CV[ck].pts[0]?CV[ck].pts[0].y:0.5));
+    for(let i=0;i<5;i++){
+      let pn=`MSK_${pk}${i}`;
+      ys.push(ps[pn]!==undefined?ps[pn]:(CV[ck].pts[i]?CV[ck].pts[i].y:0.5));
     }
-    let pts=[{x:0,y:ys[0]}];
-    for(let i=0;i<3;i++) pts.push({x:V[i],y:ys[i]});
-    pts.push({x:MAX_SPEED,y:ys[2]});
+    let xs=[0, V[0], V[1], V[2], MAX_SPEED];
+    let pts=[];
+    for(let i=0;i<5;i++) pts.push({x:xs[i], y:ys[i]});
     CV[ck]=mkCurve(pts);
   }
+  // M1 兼容 (UI 侧边栏仍显示模式1参考值, 从曲线 x=0 点读)
+  M1.KS=CV.KS.pts[0].y; M1.KDF=CV.KDF.pts[0].y; M1.KDM=CV.KDM.pts[0].y;
+  M1.KT=CV.KT.pts[0].y; M1.KRD=CV.KRD.pts[0].y;
   // 控制参数
   if(ps.MSK_RAMP!==undefined) document.getElementById('i_rmp').value=ps.MSK_RAMP;
   if(ps.MSK_MODE_CH!==undefined) document.getElementById('i_mch').value=ps.MSK_MODE_CH;
@@ -2043,9 +2027,7 @@ function applyParamsFromDict(ps){
   if(ps.MSK_TILT_V2!==undefined) document.getElementById('i_tv2').value=ps.MSK_TILT_V2;
   if(ps.MSK_TILT_V3!==undefined) document.getElementById('i_tv3').value=ps.MSK_TILT_V3;
   // UI sync
-  document.getElementById('m1_ks').value=M1.KS;document.getElementById('m1_kdf').value=M1.KDF;
-  document.getElementById('m1_kdm').value=M1.KDM;document.getElementById('m1_kt').value=M1.KT;
-  document.getElementById('m1_krd').value=M1.KRD;
+  // M1.* 从曲线同步, UI 没有单独输入框了
   document.getElementById('i_v1').value=V[0];document.getElementById('i_v2').value=V[1];
   document.getElementById('i_v3').value=V[2];
   syncGearDropdown();redraw();
@@ -2072,24 +2054,13 @@ function readFromFC(){
 }
 
 function getExportParams(){
-  // 收集所有参数为 {name: value} dict, 复用 doExport 的逻辑
   let ps={};
-  ps.MSK_M1_KS=parseFloat(document.getElementById('m1_ks').value);
-  ps.MSK_M1_KDF=parseFloat(document.getElementById('m1_kdf').value);
-  ps.MSK_M1_KDM=parseFloat(document.getElementById('m1_kdm').value);
-  ps.MSK_M1_KT=parseFloat(document.getElementById('m1_kt').value);
-  ps.MSK_M1_KRD=parseFloat(document.getElementById('m1_krd').value);
-  ps.MSK_N_PTS=3;
-  ps.MSK_V1=V[0]; ps.MSK_V2=V[1]; ps.MSK_V3=V[2];
+  ps.MSK_V1=V[0]; ps.MSK_V2=V[1]; ps.MSK_V3=V[2]; ps.MSK_V_MAX=MAX_SPEED;
+  // 5 点曲线 (K*0..K*4)
   const YM={KS:'KS',KDF:'KDF',KDM:'KDM',KT:'KT',KRD:'KRD'};
-  const EM={KS:'CS',KDF:'CDF',KDM:'CDM',KT:'CT',KRD:'CRD'};
   for(let[ck,pk] of Object.entries(YM)){
-    let s=sampleForExport(ck);
-    for(let i=0;i<3;i++) ps[`MSK_${pk}${i+1}`]=parseFloat(s.y[i].toFixed(4));
-  }
-  for(let[ck,pk] of Object.entries(EM)){
-    let s=sampleForExport(ck);
-    for(let i=0;i<2;i++) ps[`MSK_${pk}${i+1}`]=parseFloat(s.expo[i].toFixed(4));
+    let pts=CV[ck].pts;
+    for(let i=0;i<5;i++) ps[`MSK_${pk}${i}`]=parseFloat((pts[i]?pts[i].y:0).toFixed(4));
   }
   ps.MSK_RAMP=parseFloat(document.getElementById('i_rmp').value);
   ps.MSK_MODE_CH=parseFloat(document.getElementById('i_mch').value);
@@ -2239,13 +2210,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json(data)
 
         elif self.path == '/tuner':
-            # 内嵌调参工具
+            # 调参页 (链接从 Dashboard 跳过来)
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(TUNER_HTML.encode('utf-8'))
 
         else:
+            # / 返 Dashboard
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.end_headers()
