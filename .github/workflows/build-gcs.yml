@@ -109,7 +109,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pymavlink pyserial pyinstaller MAVProxy prompt_toolkit wcwidth wxpython lxml
+          pip install pymavlink pyserial pyinstaller MAVProxy prompt_toolkit wcwidth lxml
+          # wxPython 没有 Ubuntu 22+ / Python 3.11 官方 wheel, 从 extras 预编译仓库装
+          pip install -U -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-22.04 wxpython || \
+            pip install -U -f https://extras.wxpython.org/wxPython4/extras/linux/gtk3/ubuntu-24.04 wxpython || true
 
       - name: Build GCS
         run: |
