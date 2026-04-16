@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pymavlink pyserial pyinstaller MAVProxy prompt_toolkit wcwidth
+          pip install pymavlink pyserial pyinstaller MAVProxy prompt_toolkit wcwidth wxpython lxml
 
       - name: Build GCS
         run: |
@@ -47,11 +47,15 @@ jobs:
             --collect-all pymavlink `
             --collect-all prompt_toolkit `
             --collect-all wcwidth `
+            --collect-all wx `
             --collect-submodules serial `
             --hidden-import pymavlink.dialects.v20.ardupilotmega `
             --hidden-import pymavlink.dialects.v20.all `
             --hidden-import MAVProxy.modules.lib `
             --hidden-import MAVProxy.mavproxy `
+            --hidden-import wx `
+            --hidden-import lxml `
+            --hidden-import lxml.etree `
             --hidden-import pkg_resources `
             --noconfirm `
             "$mp\mavproxy.py"
@@ -105,7 +109,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pymavlink pyserial pyinstaller MAVProxy prompt_toolkit wcwidth
+          pip install pymavlink pyserial pyinstaller MAVProxy prompt_toolkit wcwidth wxpython lxml
 
       - name: Build GCS
         run: |
@@ -128,10 +132,14 @@ jobs:
             --collect-all pymavlink \
             --collect-all prompt_toolkit \
             --collect-all wcwidth \
+            --collect-all wx \
             --collect-submodules serial \
             --hidden-import pymavlink.dialects.v20.ardupilotmega \
             --hidden-import pymavlink.dialects.v20.all \
             --hidden-import MAVProxy.modules.lib \
+            --hidden-import wx \
+            --hidden-import lxml \
+            --hidden-import lxml.etree \
             --hidden-import MAVProxy.mavproxy \
             --hidden-import pkg_resources \
             --noconfirm \
