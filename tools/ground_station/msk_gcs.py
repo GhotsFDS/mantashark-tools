@@ -87,6 +87,8 @@ MSK_PARAMS = [
     "MSK_TILT_SVL","MSK_TILT_SVR","MSK_TILT_TAU","MSK_TILT_USPD",
     "MSK_TILT_V1","MSK_TILT_V2","MSK_TILT_V3",
     "MSK_V1","MSK_V2","MSK_V3","MSK_V_MAX","MSK_WING_OFS",
+    # v7.2 抬尾旋钮 (ch11 物理旋钮偏移 KRD)
+    "MSK_TAIL_CH","MSK_TAIL_LIM",
 ]
 
 # ─── MSK 日志解析 ───
@@ -756,6 +758,8 @@ canvas{display:block;width:100%;height:100%;}
     <div class="pr"><label>AUTO_CH 自动模式通道</label><input id="i_autoch" type="number" step="1" value="9"></div>
     <div class="pr"><label>AUTO_TGT 目标油门</label><input id="i_autotgt" type="number" step="0.05" value="0.80"></div>
     <div class="pr"><label>AUTO_CUT 紧急关停</label><input id="i_autocut" type="number" step="0.05" value="0.10"></div>
+    <div class="pr"><label>TAIL_CH 抬尾旋钮通道</label><input id="i_tailch" type="number" step="1" value="11"></div>
+    <div class="pr"><label>TAIL_LIM 抬尾最大偏移</label><input id="i_taillim" type="number" step="0.05" value="0.30"></div>
 
     <h3>姿态保护 (飞行模式)</h3>
     <div class="pr"><label>WING_OFS 巡航俯仰(°)</label><input id="i_wofs" type="number" step="0.5" value="8.0"></div>
@@ -1735,6 +1739,8 @@ function onFile(e){
     if(ps.MSK_AUTO_CH!==undefined) document.getElementById('i_autoch').value=ps.MSK_AUTO_CH;
     if(ps.MSK_AUTO_TGT!==undefined) document.getElementById('i_autotgt').value=ps.MSK_AUTO_TGT;
     if(ps.MSK_AUTO_CUT!==undefined) document.getElementById('i_autocut').value=ps.MSK_AUTO_CUT;
+    if(ps.MSK_TAIL_CH!==undefined) document.getElementById('i_tailch').value=ps.MSK_TAIL_CH;
+    if(ps.MSK_TAIL_LIM!==undefined) document.getElementById('i_taillim').value=ps.MSK_TAIL_LIM;
     if(ps.MSK_WING_OFS!==undefined) document.getElementById('i_wofs').value=ps.MSK_WING_OFS;
     if(ps.MSK_PIT_LIM!==undefined) document.getElementById('i_plim').value=ps.MSK_PIT_LIM;
     if(ps.MSK_ROL_LIM!==undefined) document.getElementById('i_rlim').value=ps.MSK_ROL_LIM;
@@ -1790,6 +1796,8 @@ function doExport(){
   L.push(`MSK_AUTO_CH,${document.getElementById('i_autoch').value}`);
   L.push(`MSK_AUTO_TGT,${document.getElementById('i_autotgt').value}`);
   L.push(`MSK_AUTO_CUT,${document.getElementById('i_autocut').value}`);
+  L.push(`MSK_TAIL_CH,${document.getElementById('i_tailch').value}`);
+  L.push(`MSK_TAIL_LIM,${document.getElementById('i_taillim').value}`);
   L.push('');
   // 姿态保护
   L.push(`MSK_WING_OFS,${document.getElementById('i_wofs').value}`);
@@ -2007,6 +2015,8 @@ function applyParamsFromDict(ps){
   if(ps.MSK_AUTO_CH!==undefined) document.getElementById('i_autoch').value=ps.MSK_AUTO_CH;
   if(ps.MSK_AUTO_TGT!==undefined) document.getElementById('i_autotgt').value=ps.MSK_AUTO_TGT;
   if(ps.MSK_AUTO_CUT!==undefined) document.getElementById('i_autocut').value=ps.MSK_AUTO_CUT;
+  if(ps.MSK_TAIL_CH!==undefined) document.getElementById('i_tailch').value=ps.MSK_TAIL_CH;
+  if(ps.MSK_TAIL_LIM!==undefined) document.getElementById('i_taillim').value=ps.MSK_TAIL_LIM;
   if(ps.MSK_WING_OFS!==undefined) document.getElementById('i_wofs').value=ps.MSK_WING_OFS;
   if(ps.MSK_PIT_LIM!==undefined) document.getElementById('i_plim').value=ps.MSK_PIT_LIM;
   if(ps.MSK_ROL_LIM!==undefined) document.getElementById('i_rlim').value=ps.MSK_ROL_LIM;
@@ -2073,6 +2083,8 @@ function getExportParams(){
   ps.MSK_AUTO_CH=parseFloat(document.getElementById('i_autoch').value);
   ps.MSK_AUTO_TGT=parseFloat(document.getElementById('i_autotgt').value);
   ps.MSK_AUTO_CUT=parseFloat(document.getElementById('i_autocut').value);
+  ps.MSK_TAIL_CH=parseFloat(document.getElementById('i_tailch').value);
+  ps.MSK_TAIL_LIM=parseFloat(document.getElementById('i_taillim').value);
   ps.MSK_WING_OFS=parseFloat(document.getElementById('i_wofs').value);
   ps.MSK_PIT_LIM=parseFloat(document.getElementById('i_plim').value);
   ps.MSK_ROL_LIM=parseFloat(document.getElementById('i_rlim').value);
