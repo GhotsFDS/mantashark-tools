@@ -89,6 +89,8 @@ MSK_PARAMS = [
     "MSK_V1","MSK_V2","MSK_V3","MSK_V_MAX","MSK_WING_OFS",
     # v7.2 抬尾旋钮 (ch11 物理旋钮偏移 KRD)
     "MSK_TAIL_CH","MSK_TAIL_LIM",
+    # v7.3 RTL 返航 + 分组启用 bitmask
+    "MSK_RTL_CH","MSK_RTL_LVL","MSK_GRP_EN",
 ]
 
 # ─── MSK 日志解析 ───
@@ -760,6 +762,20 @@ canvas{display:block;width:100%;height:100%;}
     <div class="pr"><label>AUTO_CUT 紧急关停</label><input id="i_autocut" type="number" step="0.05" value="0.10"></div>
     <div class="pr"><label>TAIL_CH 抬尾旋钮通道</label><input id="i_tailch" type="number" step="1" value="11"></div>
     <div class="pr"><label>TAIL_LIM 抬尾最大偏移</label><input id="i_taillim" type="number" step="0.05" value="0.30"></div>
+
+    <h3>返航 RTL (v7.3)</h3>
+    <div class="pr"><label>RTL_CH 返航开关通道</label><input id="i_rtlch" type="number" step="1" value="12"></div>
+    <div class="pr"><label>RTL_LVL 返航输出权重</label><input id="i_rtllvl" type="number" step="0.05" value="0.30"></div>
+
+    <h3>分组启用 GRP_EN (v7.3)</h3>
+    <div class="pr" style="display:flex;gap:8px;flex-wrap:wrap;">
+      <label><input type="checkbox" id="i_gen_s" checked onchange="updateGrpEn()"> KS 斜吹</label>
+      <label><input type="checkbox" id="i_gen_f" checked onchange="updateGrpEn()"> KDF 前下吹</label>
+      <label><input type="checkbox" id="i_gen_d" checked onchange="updateGrpEn()"> KDM 中下吹</label>
+      <label><input type="checkbox" id="i_gen_t" checked onchange="updateGrpEn()"> KT 后推</label>
+      <label><input type="checkbox" id="i_gen_r" checked onchange="updateGrpEn()"> KRD 后斜下</label>
+    </div>
+    <div class="pr"><label>GRP_EN bitmask (只读)</label><input id="i_grpen" type="number" readonly value="31" style="background:#222;color:#888;"></div>
 
     <h3>姿态保护 (飞行模式)</h3>
     <div class="pr"><label>WING_OFS 巡航俯仰(°)</label><input id="i_wofs" type="number" step="0.5" value="8.0"></div>
@@ -1747,6 +1763,9 @@ function onFile(e){
     if(ps.MSK_AUTO_CUT!==undefined) document.getElementById('i_autocut').value=ps.MSK_AUTO_CUT;
     if(ps.MSK_TAIL_CH!==undefined) document.getElementById('i_tailch').value=ps.MSK_TAIL_CH;
     if(ps.MSK_TAIL_LIM!==undefined) document.getElementById('i_taillim').value=ps.MSK_TAIL_LIM;
+    if(ps.MSK_RTL_CH!==undefined) document.getElementById('i_rtlch').value=ps.MSK_RTL_CH;
+    if(ps.MSK_RTL_LVL!==undefined) document.getElementById('i_rtllvl').value=ps.MSK_RTL_LVL;
+    if(ps.MSK_GRP_EN!==undefined) applyGrpEn(ps.MSK_GRP_EN);
     if(ps.MSK_WING_OFS!==undefined) document.getElementById('i_wofs').value=ps.MSK_WING_OFS;
     if(ps.MSK_PIT_LIM!==undefined) document.getElementById('i_plim').value=ps.MSK_PIT_LIM;
     if(ps.MSK_ROL_LIM!==undefined) document.getElementById('i_rlim').value=ps.MSK_ROL_LIM;
@@ -1804,6 +1823,10 @@ function doExport(){
   L.push(`MSK_AUTO_CUT ${document.getElementById('i_autocut').value}`);
   L.push(`MSK_TAIL_CH ${document.getElementById('i_tailch').value}`);
   L.push(`MSK_TAIL_LIM ${document.getElementById('i_taillim').value}`);
+  L.push('');
+  L.push(`MSK_RTL_CH ${document.getElementById('i_rtlch').value}`);
+  L.push(`MSK_RTL_LVL ${document.getElementById('i_rtllvl').value}`);
+  L.push(`MSK_GRP_EN ${document.getElementById('i_grpen').value}`);
   L.push('');
   // 姿态保护
   L.push(`MSK_WING_OFS ${document.getElementById('i_wofs').value}`);
@@ -2023,6 +2046,9 @@ function applyParamsFromDict(ps){
   if(ps.MSK_AUTO_CUT!==undefined) document.getElementById('i_autocut').value=ps.MSK_AUTO_CUT;
   if(ps.MSK_TAIL_CH!==undefined) document.getElementById('i_tailch').value=ps.MSK_TAIL_CH;
   if(ps.MSK_TAIL_LIM!==undefined) document.getElementById('i_taillim').value=ps.MSK_TAIL_LIM;
+  if(ps.MSK_RTL_CH!==undefined) document.getElementById('i_rtlch').value=ps.MSK_RTL_CH;
+  if(ps.MSK_RTL_LVL!==undefined) document.getElementById('i_rtllvl').value=ps.MSK_RTL_LVL;
+  if(ps.MSK_GRP_EN!==undefined) applyGrpEn(ps.MSK_GRP_EN);
   if(ps.MSK_WING_OFS!==undefined) document.getElementById('i_wofs').value=ps.MSK_WING_OFS;
   if(ps.MSK_PIT_LIM!==undefined) document.getElementById('i_plim').value=ps.MSK_PIT_LIM;
   if(ps.MSK_ROL_LIM!==undefined) document.getElementById('i_rlim').value=ps.MSK_ROL_LIM;
@@ -2091,6 +2117,9 @@ function getExportParams(){
   ps.MSK_AUTO_CUT=parseFloat(document.getElementById('i_autocut').value);
   ps.MSK_TAIL_CH=parseFloat(document.getElementById('i_tailch').value);
   ps.MSK_TAIL_LIM=parseFloat(document.getElementById('i_taillim').value);
+  ps.MSK_RTL_CH=parseFloat(document.getElementById('i_rtlch').value);
+  ps.MSK_RTL_LVL=parseFloat(document.getElementById('i_rtllvl').value);
+  ps.MSK_GRP_EN=parseFloat(document.getElementById('i_grpen').value);
   ps.MSK_WING_OFS=parseFloat(document.getElementById('i_wofs').value);
   ps.MSK_PIT_LIM=parseFloat(document.getElementById('i_plim').value);
   ps.MSK_ROL_LIM=parseFloat(document.getElementById('i_rlim').value);
@@ -2113,6 +2142,27 @@ function getExportParams(){
 }
 
 // 舵机校准快捷按钮: 单独写 MSK_TILT_CAL 到飞控, 不依赖 writeToFC 的全量写
+// 分组启用复选框 → bitmask 回填
+function updateGrpEn(){
+  let v = 0;
+  if(document.getElementById('i_gen_s').checked) v += 1;
+  if(document.getElementById('i_gen_f').checked) v += 2;
+  if(document.getElementById('i_gen_d').checked) v += 4;
+  if(document.getElementById('i_gen_t').checked) v += 8;
+  if(document.getElementById('i_gen_r').checked) v += 16;
+  document.getElementById('i_grpen').value = v;
+}
+// bitmask → 5 复选框
+function applyGrpEn(v){
+  v = Math.floor(Number(v) || 0);
+  document.getElementById('i_gen_s').checked = (v & 1) !== 0;
+  document.getElementById('i_gen_f').checked = (v & 2) !== 0;
+  document.getElementById('i_gen_d').checked = (v & 4) !== 0;
+  document.getElementById('i_gen_t').checked = (v & 8) !== 0;
+  document.getElementById('i_gen_r').checked = (v & 16) !== 0;
+  document.getElementById('i_grpen').value = v;
+}
+
 function calBtn(deg){
   document.getElementById('i_tcal').value=deg;
   fetch('/api/params/write',{
