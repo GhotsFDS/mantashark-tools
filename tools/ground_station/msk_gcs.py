@@ -1707,7 +1707,13 @@ function onFile(e){
     let ps={};
     ev.target.result.split('\n').forEach(l=>{
       l=l.replace(/#.*/,'').trim();if(!l)return;
-      let[k,v]=l.split(',');if(k&&v)ps[k.trim()]=parseFloat(v.trim());
+      // 兼容: 逗号分隔 (MSK 工具导出) 和 空格/TAB 分隔 (Mission Planner .parm 标准)
+      let parts = l.split(/[,\s]+/).filter(x=>x.length);
+      if(parts.length >= 2){
+        let k = parts[0].trim();
+        let v = parseFloat(parts[1]);
+        if(k && !isNaN(v)) ps[k] = v;
+      }
     });
     // 断点
     nPts=N_PTS;
@@ -1772,54 +1778,54 @@ function onFile(e){
 function doExport(){
   let L=['# MantaShark v7 Mixer Parameters (5-point curve)','# 可直接导入 Mission Planner',''];
   // 速度断点
-  L.push(`MSK_V1,${V[0].toFixed(1)}`);
-  L.push(`MSK_V2,${V[1].toFixed(1)}`);
-  L.push(`MSK_V3,${V[2].toFixed(1)}`);
-  L.push(`MSK_V_MAX,${MAX_SPEED.toFixed(1)}`);
+  L.push(`MSK_V1 ${V[0].toFixed(1)}`);
+  L.push(`MSK_V2 ${V[1].toFixed(1)}`);
+  L.push(`MSK_V3 ${V[2].toFixed(1)}`);
+  L.push(`MSK_V_MAX ${MAX_SPEED.toFixed(1)}`);
   L.push('');
   // 5 点 Y (K*0..K*4 每组 5 个)
   const YM={KS:'KS',KDF:'KDF',KDM:'KDM',KT:'KT',KRD:'KRD'};
   for(let[ck,pk] of Object.entries(YM)){
     let pts=CV[ck].pts;
-    for(let i=0;i<5;i++) L.push(`MSK_${pk}${i},${(pts[i]?pts[i].y:0).toFixed(3)}`);
+    for(let i=0;i<5;i++) L.push(`MSK_${pk}${i} ${(pts[i]?pts[i].y:0).toFixed(3)}`);
   }
   L.push('');
   // Control
-  L.push(`MSK_RAMP,${document.getElementById('i_rmp').value}`);
-  L.push(`MSK_MODE_CH,${document.getElementById('i_mch').value}`);
-  L.push(`MSK_GEAR_CH,${document.getElementById('i_gch').value}`);
-  L.push(`MSK_CHK_CH,${document.getElementById('i_cch').value}`);
-  L.push(`MSK_CHK_PWM,${document.getElementById('i_ckp').value}`);
-  L.push(`MSK_CHK_STOP,${document.getElementById('i_cks').value}`);
-  L.push(`MSK_CHK_GRP_MS,${document.getElementById('i_ckg').value}`);
-  L.push(`MSK_GPS_TAU,${document.getElementById('i_gtau').value}`);
-  L.push(`MSK_AUTO_CH,${document.getElementById('i_autoch').value}`);
-  L.push(`MSK_AUTO_TGT,${document.getElementById('i_autotgt').value}`);
-  L.push(`MSK_AUTO_CUT,${document.getElementById('i_autocut').value}`);
-  L.push(`MSK_TAIL_CH,${document.getElementById('i_tailch').value}`);
-  L.push(`MSK_TAIL_LIM,${document.getElementById('i_taillim').value}`);
+  L.push(`MSK_RAMP ${document.getElementById('i_rmp').value}`);
+  L.push(`MSK_MODE_CH ${document.getElementById('i_mch').value}`);
+  L.push(`MSK_GEAR_CH ${document.getElementById('i_gch').value}`);
+  L.push(`MSK_CHK_CH ${document.getElementById('i_cch').value}`);
+  L.push(`MSK_CHK_PWM ${document.getElementById('i_ckp').value}`);
+  L.push(`MSK_CHK_STOP ${document.getElementById('i_cks').value}`);
+  L.push(`MSK_CHK_GRP_MS ${document.getElementById('i_ckg').value}`);
+  L.push(`MSK_GPS_TAU ${document.getElementById('i_gtau').value}`);
+  L.push(`MSK_AUTO_CH ${document.getElementById('i_autoch').value}`);
+  L.push(`MSK_AUTO_TGT ${document.getElementById('i_autotgt').value}`);
+  L.push(`MSK_AUTO_CUT ${document.getElementById('i_autocut').value}`);
+  L.push(`MSK_TAIL_CH ${document.getElementById('i_tailch').value}`);
+  L.push(`MSK_TAIL_LIM ${document.getElementById('i_taillim').value}`);
   L.push('');
   // 姿态保护
-  L.push(`MSK_WING_OFS,${document.getElementById('i_wofs').value}`);
-  L.push(`MSK_PIT_LIM,${document.getElementById('i_plim').value}`);
-  L.push(`MSK_ROL_LIM,${document.getElementById('i_rlim').value}`);
-  L.push(`MSK_ATT_KP,${document.getElementById('i_atkp').value}`);
-  L.push(`MSK_RC_LIM,${document.getElementById('i_rclim').value}`);
+  L.push(`MSK_WING_OFS ${document.getElementById('i_wofs').value}`);
+  L.push(`MSK_PIT_LIM ${document.getElementById('i_plim').value}`);
+  L.push(`MSK_ROL_LIM ${document.getElementById('i_rlim').value}`);
+  L.push(`MSK_ATT_KP ${document.getElementById('i_atkp').value}`);
+  L.push(`MSK_RC_LIM ${document.getElementById('i_rclim').value}`);
   L.push('');
   // 倾转舵 (DFL/DFR)
-  L.push(`MSK_TILT_SVL,${document.getElementById('i_tsvl').value}`);
-  L.push(`MSK_TILT_SVR,${document.getElementById('i_tsvr').value}`);
-  L.push(`MSK_TILT_L_ZERO,${document.getElementById('i_tlz').value}`);
-  L.push(`MSK_TILT_L_DIR,${document.getElementById('i_tld').value}`);
-  L.push(`MSK_TILT_R_ZERO,${document.getElementById('i_trz').value}`);
-  L.push(`MSK_TILT_R_DIR,${document.getElementById('i_trd').value}`);
-  L.push(`MSK_TILT_USPD,${document.getElementById('i_tuspd').value}`);
-  L.push(`MSK_TILT_DEG,${document.getElementById('i_tm').value}`);
-  L.push(`MSK_TILT_TAU,${document.getElementById('i_ttau').value}`);
-  L.push(`MSK_TILT_CAL,${document.getElementById('i_tcal').value}`);
-  L.push(`MSK_TILT_V1,${document.getElementById('i_tv1').value}`);
-  L.push(`MSK_TILT_V2,${document.getElementById('i_tv2').value}`);
-  L.push(`MSK_TILT_V3,${document.getElementById('i_tv3').value}`);
+  L.push(`MSK_TILT_SVL ${document.getElementById('i_tsvl').value}`);
+  L.push(`MSK_TILT_SVR ${document.getElementById('i_tsvr').value}`);
+  L.push(`MSK_TILT_L_ZERO ${document.getElementById('i_tlz').value}`);
+  L.push(`MSK_TILT_L_DIR ${document.getElementById('i_tld').value}`);
+  L.push(`MSK_TILT_R_ZERO ${document.getElementById('i_trz').value}`);
+  L.push(`MSK_TILT_R_DIR ${document.getElementById('i_trd').value}`);
+  L.push(`MSK_TILT_USPD ${document.getElementById('i_tuspd').value}`);
+  L.push(`MSK_TILT_DEG ${document.getElementById('i_tm').value}`);
+  L.push(`MSK_TILT_TAU ${document.getElementById('i_ttau').value}`);
+  L.push(`MSK_TILT_CAL ${document.getElementById('i_tcal').value}`);
+  L.push(`MSK_TILT_V1 ${document.getElementById('i_tv1').value}`);
+  L.push(`MSK_TILT_V2 ${document.getElementById('i_tv2').value}`);
+  L.push(`MSK_TILT_V3 ${document.getElementById('i_tv3').value}`);
   L.push('');
   // GEOM as comments
   L.push('# GEOM (roll/pitch/yaw per motor, for reference)');
@@ -1828,7 +1834,7 @@ function doExport(){
     L.push(`# ${m.id}[${m.i}]: r=${g.r.toFixed(2)} p=${g.p.toFixed(2)} y=${g.y.toFixed(2)}`);
   }
   let b=new Blob([L.join('\n')],{type:'text/plain'});
-  let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='msk_v7_params.txt';a.click();
+  let a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='msk_v7_params.parm';a.click();
   toast('Exported msk_v7_params.txt');
 }
 
