@@ -300,8 +300,8 @@ class Bridge:
 
 def main():
     ap = argparse.ArgumentParser(
-        description='MantaShark Tuner MAVLink↔WebSocket 桥',
-        epilog='不带 --device 启动 → 交互式选串口/波特率. --auto 跳过交互用第一个找到的口.')
+        description='MantaShark Tuner MAVLink<->WebSocket bridge',
+        epilog='No --device: interactive serial+baud picker. --auto: pick first found.')
     ap.add_argument('--device', default=None, help='串口/UDP 连接串 (e.g. COM3, /dev/ttyACM0, udp:14551)')
     ap.add_argument('--baud', type=int, default=115200)
     ap.add_argument('--ws-host', default='127.0.0.1')
