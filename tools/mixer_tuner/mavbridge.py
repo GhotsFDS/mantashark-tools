@@ -45,6 +45,19 @@ VENV_SITE = os.path.normpath(os.path.join(SCRIPT_DIR, '..', '..', 'sim', '.venv'
 if os.path.isdir(VENV_SITE) and VENV_SITE not in sys.path:
     sys.path.insert(0, VENV_SITE)
 
+# Windows 默认 cp1252 控制台撞中文 → 强制 UTF-8.
+# 含 PyInstaller onefile (Win runner CI smoke test) 也走这里.
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+    try:
+        os.system('')  # ANSI escape (Win10+)
+    except Exception:
+        pass
+
 try:
     from pymavlink import mavutil
     import websockets
