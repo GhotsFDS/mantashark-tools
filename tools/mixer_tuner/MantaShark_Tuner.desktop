@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MantaShark Mixer Tuner
+GenericName=WIG Flight Controller Tuner
+Comment=MantaShark v8 混控调参工具 + GCS
+Icon=utilities-terminal
+Exec=bash -c "cd '$(dirname %k)' && ./launch.sh"
+Terminal=true
+Categories=Development;Engineering;
+StartupNotify=true

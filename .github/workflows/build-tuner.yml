@@ -1,0 +1,159 @@
+name: Build MantaShark Tuner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/mixer_tuner/**'
+      - '.github/workflows/build-tuner.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink "websockets<13" pyserial pyinstaller
+
+      - name: Build Tuner HTML (single-file React)
+        run: |
+          cd tools/mixer_tuner
+          npm install
+          npm run build
+
+      - name: Build mavbridge.exe
+        run: |
+          cd tools/mixer_tuner
+          pyinstaller --clean --noconfirm mavbridge.spec
+          if (-not (Test-Path "dist/mavbridge.exe")) { throw "mavbridge.exe missing" }
+          $size = (Get-Item "dist/mavbridge.exe").Length / 1MB
+          Write-Host ("mavbridge.exe: {0:N1} MB" -f $size)
+
+      - name: Smoke test mavbridge.exe (--help)
+        run: |
+          cd tools/mixer_tuner
+          dist/mavbridge.exe --help
+
+      - name: Assemble release bundle
+        run: |
+          cd tools/mixer_tuner
+          New-Item -Force -ItemType Directory release/MantaSharkTuner-windows | Out-Null
+          Copy-Item dist/mavbridge.exe release/MantaSharkTuner-windows/
+          Copy-Item dist/index.html    release/MantaSharkTuner-windows/Tuner.html
+          @'
+          @echo off
+          chcp 65001 >nul 2>&1
+          title MantaShark Mixer Tuner
+          cd /d "%~dp0"
+          echo [launcher] 浏览器打开 Tuner.html
+          start "" "%CD%\Tuner.html"
+          echo.
+          echo ===== 启动 mavbridge.exe - 选串口和波特率 =====
+          mavbridge.exe
+          echo.
+          pause
+          '@ | Out-File -Encoding ascii release/MantaSharkTuner-windows/start.bat
+          @'
+          MantaShark Mixer Tuner v9 - Windows release
+
+          1. Double-click start.bat
+          2. Choose COM port and baudrate in the terminal
+          3. The Tuner UI auto-opens in your default browser
+
+          Files:
+            start.bat       launcher
+            mavbridge.exe   MAVLink<->WebSocket bridge (Python runtime bundled)
+            Tuner.html      single-file React Tuner
+
+          No Python or Node needed. Unzip and run.
+          '@ | Out-File -Encoding utf8 release/MantaSharkTuner-windows/README.txt
+          Compress-Archive -Path release/MantaSharkTuner-windows/* -DestinationPath release/MantaSharkTuner-windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MantaSharkTuner-windows
+          path: tools/mixer_tuner/release/MantaSharkTuner-windows.zip
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/mixer_tuner/release/MantaSharkTuner-windows.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink "websockets<13" pyserial pyinstaller
+
+      - name: Build Tuner HTML
+        run: |
+          cd tools/mixer_tuner
+          npm install
+          npm run build
+
+      - name: Build mavbridge (Linux)
+        run: |
+          cd tools/mixer_tuner
+          pyinstaller --clean --noconfirm mavbridge.spec
+          test -f dist/mavbridge
+
+      - name: Assemble Linux bundle
+        run: |
+          cd tools/mixer_tuner
+          mkdir -p release/MantaSharkTuner-linux
+          cp dist/mavbridge       release/MantaSharkTuner-linux/
+          cp dist/index.html      release/MantaSharkTuner-linux/Tuner.html
+          cat > release/MantaSharkTuner-linux/start.sh <<'EOF'
+          #!/usr/bin/env bash
+          cd "$(dirname "$(readlink -f "$0")")"
+          URL="file://$(pwd)/Tuner.html"
+          echo "[launcher] 打开 $URL"
+          (xdg-open "$URL" >/dev/null 2>&1 &) || (firefox "$URL" >/dev/null 2>&1 &) || echo "手动打开 $URL"
+          echo
+          echo "===== 启动 mavbridge - 选串口和波特率 ====="
+          ./mavbridge
+          echo
+          read -r -p "按回车关闭..."
+          EOF
+          chmod +x release/MantaSharkTuner-linux/start.sh release/MantaSharkTuner-linux/mavbridge
+          cd release && tar -czf MantaSharkTuner-linux.tar.gz MantaSharkTuner-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MantaSharkTuner-linux
+          path: tools/mixer_tuner/release/MantaSharkTuner-linux.tar.gz
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/mixer_tuner/release/MantaSharkTuner-linux.tar.gz
