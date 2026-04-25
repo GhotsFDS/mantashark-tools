@@ -179,7 +179,7 @@ def interactive_pick(default_baud=115200):
 
 
 class Bridge:
-    def __init__(self, device, baud):
+    def __init__(self, device, baud, mp_outs=None):
         self.device = device
         self.baud = baud
         self.mav = None
@@ -188,6 +188,10 @@ class Bridge:
         self.running = True
         self._sys = 1
         self._comp = 1
+        # MP forward 入口列表 (UDP 字符串, eg ['udpout:127.0.0.1:14550'] / ['udpin:0.0.0.0:14550']).
+        # mavbridge 收 FC → forward 给所有 mp_outs; 也读 mp_outs 回包写回 FC.
+        self.mp_outs = mp_outs or []
+        self.mp_conns = []   # [mavutil.mavlink_connection, ...]
 
     def connect_mav(self):
         print(f'[bridge] 连 FC: {self.device} @ {self.baud}')
@@ -200,12 +204,30 @@ class Bridge:
         self._comp = self.mav.target_component
         print(f'[bridge] ✓ FC sys={self._sys} comp={self._comp} type={m.type}')
 
+        # 起 MP forward 出口 (Mission Planner / QGC 接这些 UDP 端点)
+        for spec in self.mp_outs:
+            try:
+                conn = mavutil.mavlink_connection(spec, source_system=255, source_component=0)
+                self.mp_conns.append(conn)
+                print(f'[bridge] MP 桥: {spec} ✓')
+            except Exception as e:
+                print(f'[bridge] MP 桥失败 {spec}: {e}')
+
     def mav_loop(self):
-        """后台线程: 收 MAVLink → 广播给 WS 客户端."""
+        """后台线程: 收 MAVLink → 广播给 WS 客户端 + 转发给 MP."""
         while self.running:
             m = self.mav.recv_match(blocking=True, timeout=0.5)
             if m is None:
                 continue
+            # FC → MP 透传 (整包转发)
+            if self.mp_conns:
+                try:
+                    buf = m.get_msgbuf()
+                    for c in self.mp_conns:
+                        try: c.write(buf)
+                        except Exception: pass
+                except Exception:
+                    pass
             t = m.get_type()
             data = None
             if t == 'HEARTBEAT':
@@ -302,10 +324,28 @@ class Bridge:
             self.clients.discard(ws)
             print(f'[bridge] WS 客户端断开, 剩 {len(self.clients)}')
 
+    def mp_to_fc_loop(self, conn, label):
+        """MP → FC: 把 MP 端 (Mission Planner / QGC) 发的 MAVLink 透传到 FC."""
+        while self.running:
+            try:
+                m = conn.recv_match(blocking=True, timeout=0.5)
+            except Exception:
+                continue
+            if m is None or m.get_type() == 'BAD_DATA':
+                continue
+            try:
+                self.mav.write(m.get_msgbuf())
+            except Exception as e:
+                print(f'[bridge] MP→FC 写失败 ({label}): {e}')
+
     async def run(self, ws_host, ws_port):
         self.loop = asyncio.get_running_loop()
         t = threading.Thread(target=self.mav_loop, daemon=True)
         t.start()
+        # 每个 MP 端点起独立线程做反向转发
+        for spec, conn in zip(self.mp_outs, self.mp_conns):
+            tt = threading.Thread(target=self.mp_to_fc_loop, args=(conn, spec), daemon=True)
+            tt.start()
         print(f'[bridge] WS 服务器监听 ws://{ws_host}:{ws_port}')
         async with websockets.serve(self.handle_client, ws_host, ws_port):
             await asyncio.Future()  # run forever
@@ -320,26 +360,38 @@ def main():
     ap.add_argument('--ws-host', default='127.0.0.1')
     ap.add_argument('--ws-port', type=int, default=8765)
     ap.add_argument('--auto', action='store_true', help='不交互, 自动选第一个串口')
+    ap.add_argument('--mp-out', action='append', default=[],
+                    help='MP/QGC 桥接出口, eg udpout:127.0.0.1:14550 (可多次). 双向转发.')
     args = ap.parse_args()
 
     if args.device:
         device, baud = args.device, args.baud
+        mp_outs = list(args.mp_out)
     elif args.auto:
         device = find_device()
         if not device:
             print('[FATAL] --auto 模式没找到串口. 插 FC USB 线后重试.')
             sys.exit(2)
         baud = args.baud
+        mp_outs = list(args.mp_out)
         print(f'[bridge] --auto 选: {device} @ {baud}')
     else:
         # 交互式让用户选 (Windows + Linux 通用)
         try:
             device, baud = interactive_pick(default_baud=args.baud)
+            # 问 MP 桥接
+            ans = input('  桥接到 Mission Planner / QGC? [y/N]: ').strip().lower()
+            mp_outs = list(args.mp_out)
+            if ans == 'y':
+                pmp = input('  MP UDP 端口 [14550]: ').strip() or '14550'
+                mp_outs.append(f'udpout:127.0.0.1:{pmp}')
+                print(f'  ✓ MP 桥接: udpout:127.0.0.1:{pmp}')
+                print(f'    MP 端添加 UDP 连接: 127.0.0.1:{pmp}')
         except (KeyboardInterrupt, EOFError):
             print('\n[bridge] 已取消')
             sys.exit(1)
 
-    bridge = Bridge(device, baud)
+    bridge = Bridge(device, baud, mp_outs=mp_outs)
     try:
         bridge.connect_mav()
     except Exception as e:

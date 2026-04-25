@@ -15,7 +15,8 @@ interface Actions {
   setSimulateArmed: (v: boolean) => void;
   setSelectedCurve: (c: GroupKey) => void;
   setSelectedTiltCurve: (c: TiltAlias) => void;
-  setCurveMode: (m: 'k' | 'tilt') => void;
+  setCurveMode: (m: 'k' | 'tilt' | 'joint') => void;
+  setMergeLR: (v: boolean) => void;
   setTab: (t: string) => void;
   setTiltPreview: (id: TiltId, v: number) => void;
   setPhaseConfig: (p: PhaseName, field: 'trim' | TiltId, v: number) => void;
@@ -38,7 +39,8 @@ const INITIAL: AppState = {
   selectedCurve: 'KS',
   selectedTiltCurve: 'SGRP',
   curveMode: 'k',
-  currentTab: 'overview',
+  mergeLR: true,                                   // 默认合并左右
+  currentTab: 'gcs',
   // 默认全 45° (绝对物理角度 = 中立)
   tiltPreview: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 },
   analysisRdTilt: 45,
@@ -66,6 +68,7 @@ export const useStore = create<AppState & Actions>()(
       setSelectedCurve: (c) => set({ selectedCurve: c }),
       setSelectedTiltCurve: (c) => set({ selectedTiltCurve: c }),
       setCurveMode: (m) => set({ curveMode: m }),
+      setMergeLR: (v) => set({ mergeLR: v }),
       setTab: (t) => set({ currentTab: t }),
 
       setTiltPreview: (id, v) => set(s => ({ tiltPreview: { ...s.tiltPreview, [id]: v } })),
@@ -108,8 +111,55 @@ export const useStore = create<AppState & Actions>()(
         if (next !== prev) set({ currentPhase: next });
       },
     }),
-    { name: 'mantashark-tuner-v9' },
+    {
+      name: 'mantashark-tuner-v9',
+      // Bumping version: 旧的 persisted state 会被 migrate() 处理. 改 schema 时 +1 强制清旧坏数据.
+      version: 3,
+      migrate: (persisted: any, version: number) => {
+        // v3 之前的 schema 不兼容 (selectedCurve 可能存了非法值导致崩溃) → 重置 UI 状态.
+        if (!persisted || version < 3) {
+          return {
+            ...persisted,
+            selectedCurve: 'KS',
+            selectedTiltCurve: 'SGRP',
+            curveMode: 'k',
+            currentTab: 'gcs',
+          };
+        }
+        return persisted;
+      },
+      // 校验阀: 加载时检查关键枚举字段, 任一非法直接重置该字段, 不让坏值传到 React.
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const K_KEYS = ['KS','KDF','KT','KRD'];
+        const TILT_ALIASES_OK = ['SGRP','DFL','DFR','TL1','TR1','RDL','RDR'];
+        const MODES_OK = ['k','tilt','joint'];
+        const TABS_OK = ['gcs','profile','tilts','geometry','force','preflight','params'];
+        const PHASES_OK = ['STATIONARY','TAXI','CUSHION','GROUND_EFFECT','EMERGENCY'];
+        if (!K_KEYS.includes(state.selectedCurve as string))         state.selectedCurve = 'KS';
+        if (!TILT_ALIASES_OK.includes(state.selectedTiltCurve as string)) state.selectedTiltCurve = 'SGRP';
+        if (!MODES_OK.includes(state.curveMode as string))           state.curveMode = 'k';
+        if (!TABS_OK.includes(state.currentTab))                     state.currentTab = 'gcs';
+        if (!PHASES_OK.includes(state.currentPhase as string))       state.currentPhase = 'STATIONARY';
+      },
+    },
   ),
 );
+
+// 紧急重置: 用户加 ?reset=1 进 URL → 清持久化, 刷新即恢复全默认
+if (typeof window !== 'undefined') {
+  const sp = new URLSearchParams(window.location.search);
+  if (sp.get('reset') === '1') {
+    try { localStorage.removeItem('mantashark-tuner-v9'); } catch {}
+    sp.delete('reset');
+    const q = sp.toString();
+    window.location.replace(window.location.pathname + (q ? '?' + q : ''));
+  }
+  // 全局兜底: 任意 React 渲染抛错时清持久化 + 刷新
+  (window as any).__mskResetStore = () => {
+    try { localStorage.removeItem('mantashark-tuner-v9'); } catch {}
+    location.reload();
+  };
+}
 
 export { PHASES };

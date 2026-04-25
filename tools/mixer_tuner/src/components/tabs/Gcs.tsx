@@ -1,8 +1,16 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { gcs, GcsMessage } from '../../lib/gcs';
 import { useStore } from '../../store/useStore';
-import { Wifi, WifiOff, PlugZap, Upload, Download, Lock, Unlock, RefreshCcw, Terminal } from 'lucide-react';
+import { Wifi, WifiOff, PlugZap, Upload, Download, Lock, Unlock, RefreshCcw, Terminal, TrendingUp } from 'lucide-react';
 import { DEFAULT_PARAMS } from '../../lib/defaults';
+import { evalCurve } from '../../lib/pchip';
+import { GROUP_COLORS, GROUP_LABELS, MOTORS, SINGLE_MOTOR_MAX_N, VEHICLE_WEIGHT_N } from '../../lib/actuators';
+import type { GroupKey } from '../../lib/types';
+
+interface Props {
+  currentK?: Record<GroupKey, number>;        // 来自 App (UI 调试态), 仅未连 FC 时显示
+  effectiveSpeed?: number;
+}
 
 interface Telemetry {
   heartbeat?: { mode: string; armed: boolean; ts: number };
@@ -15,7 +23,7 @@ interface Telemetry {
 
 interface Stats { pullCount: number; pullTotal: number; pushCount: number; }
 
-export function Gcs() {
+export function Gcs({ currentK, effectiveSpeed }: Props) {
   const { params, setParam } = useStore();
   const [url, setUrl] = useState(gcs.getUrl());
   const [connected, setConnected] = useState(false);
@@ -82,128 +90,163 @@ export function Gcs() {
   const sevColor = (s: number) => s <= 2 ? 'text-err' : s <= 4 ? 'text-warn' : s <= 6 ? 'text-fg' : 'text-fg-dim';
   const healthy = connected && tlm.lastMsgMs && (Date.now() - tlm.lastMsgMs < 3000);
 
+  // ─── 实时 K (FC 真实地速 → PCHIP) ───
+  const liveSpd = healthy ? (tlm.vfr?.groundspeed ?? 0) : null;
+  const liveK: Record<GroupKey, number> = useMemo(() => {
+    if (liveSpd == null) return currentK ?? { KS:0, KDF:0, KT:0, KRD:0 };
+    const k: Record<GroupKey, number> = { KS:0, KDF:0, KT:0, KRD:0 };
+    for (const g of ['KS','KDF','KT','KRD'] as GroupKey[]) {
+      k[g] = Math.max(0, Math.min(1, evalCurve(g, liveSpd, params)));
+    }
+    return k;
+  }, [liveSpd, params, currentK]);
+  const liveTotalThrust = MOTORS.reduce((s, m) => s + (liveK[m.group] ?? 0) * SINGLE_MOTOR_MAX_N, 0);
+  const liveTW = liveTotalThrust / VEHICLE_WEIGHT_N;
+
+  const totalParams = Object.keys(DEFAULT_PARAMS).filter(k => !/^PRE_OVR_/.test(k)).length;
+
   return (
-    <div className="grid grid-cols-12 gap-3">
-      {/* 连接 */}
-      <div className="card col-span-4">
-        <div className="card-title flex items-center gap-2">
-          <PlugZap size={14} />连接
-        </div>
-        <div className="flex items-center gap-2 mb-3">
-          {healthy ? <Wifi size={18} className="text-ok" /> : connected ? <Wifi size={18} className="text-warn" /> : <WifiOff size={18} className="text-fg-dim" />}
-          <div className="flex-1">
-            <div className="val-mono text-[13px]">
-              {!connected ? '未连接' : healthy ? '在线' : '连上但无数据'}
-            </div>
-            <div className="text-[10px] text-fg-dim">mavbridge.py @ {url}</div>
+    <div className="grid grid-cols-12 gap-2 auto-rows-min">
+      {/* ═══ 行 1: 连接 + 全部遥测 + 操作 + 同步 (一字横排, 高度统一) ═══ */}
+      <div className="card col-span-12 py-2">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* 连接区 */}
+          <div className="flex items-center gap-1.5">
+            {healthy ? <Wifi size={14} className="text-ok"/> : connected ? <Wifi size={14} className="text-warn"/> : <WifiOff size={14} className="text-fg-dim"/>}
+            <span className="val-mono text-[11px] w-12">
+              {!connected ? '未连接' : healthy ? '在线' : '无数据'}
+            </span>
+            <input value={url} onChange={e => setUrl(e.target.value)}
+                   className="input val-mono text-[10px] py-0.5 w-44" disabled={connected}
+                   placeholder="ws://127.0.0.1:8765" />
+            {!connected
+              ? <button className="btn btn-primary text-[10px] py-0.5 px-2" onClick={connect}>连接</button>
+              : <button className="btn btn-warn text-[10px] py-0.5 px-2" onClick={disconnect}>断开</button>}
+          </div>
+
+          {/* 遥测格 */}
+          <div className="flex items-center gap-1 ml-2">
+            <TlmCell label="Mode" val={tlm.heartbeat?.mode ?? '—'} />
+            <TlmCell label="Armed" val={armed ? 'ARMED' : 'OFF'} color={armed ? 'warn' : 'ok'} />
+            <TlmCell label="GPS" val={tlm.gps ? `${tlm.gps.fix_type}/${tlm.gps.sats}★` : '—'} />
+            <TlmCell label="HDOP" val={tlm.gps && tlm.gps.hdop !== null ? tlm.gps.hdop.toFixed(1) : '—'} />
+            <TlmCell label="Pitch" val={tlm.attitude ? tlm.attitude.pitch.toFixed(0)+'°' : '—'} />
+            <TlmCell label="Roll" val={tlm.attitude ? tlm.attitude.roll.toFixed(0)+'°' : '—'} />
+            <TlmCell label="地速" val={tlm.vfr ? tlm.vfr.groundspeed.toFixed(1) : '—'} highlight />
+            <TlmCell label="油门" val={tlm.vfr ? tlm.vfr.throttle+'%' : '—'} />
+          </div>
+
+          <div className="flex-1"/>
+
+          {/* Arm / Reboot / 同步 一组 */}
+          <div className="flex items-center gap-1">
+            {!armed ? (
+              <button className="btn btn-primary text-[10px] py-0.5 px-2" onClick={() => gcs.arm()} disabled={!connected}>
+                <Unlock size={11} className="inline mr-0.5"/>Arm
+              </button>
+            ) : (
+              <button className="btn btn-warn text-[10px] py-0.5 px-2" onClick={() => gcs.disarm()} disabled={!connected}>
+                <Lock size={11} className="inline mr-0.5"/>Disarm
+              </button>
+            )}
+            <button className="btn text-[10px] py-0.5 px-2"
+                    onClick={() => { if (confirm('重启飞控?')) gcs.reboot(); }}
+                    disabled={!connected}>
+              <RefreshCcw size={11} className="inline mr-0.5"/>Reboot
+            </button>
+            <span className="w-px h-4 bg-line mx-1"/>
+            <button className="btn text-[10px] py-0.5 px-2"
+                    onClick={pullAll} disabled={!connected || syncMode !== 'none'}>
+              <Download size={11} className="inline mr-0.5"/>
+              {syncMode === 'pulling' ? `${stats.pullCount}/${stats.pullTotal || '?'}` : `拉取(${totalParams})`}
+            </button>
+            <button className="btn btn-primary text-[10px] py-0.5 px-2"
+                    onClick={pushAll} disabled={!connected || syncMode !== 'none' || armed}>
+              <Upload size={11} className="inline mr-0.5"/>
+              {syncMode === 'pushing' ? `${stats.pushCount}` : '保存'}
+            </button>
           </div>
         </div>
-        <div className="flex gap-2 mb-2">
-          <input value={url} onChange={e => setUrl(e.target.value)}
-                 className="input flex-1 val-mono text-[10px]" disabled={connected} />
-        </div>
-        <div className="flex gap-2">
-          {!connected ? (
-            <button className="btn btn-primary flex-1" onClick={connect}>连接</button>
-          ) : (
-            <button className="btn btn-warn flex-1" onClick={disconnect}>断开</button>
-          )}
-        </div>
-        <div className="text-[9px] text-fg-dim mt-2">
-          launch.sh 自动起 <code className="text-accent">mavbridge.py</code>. 手动: <code>python3 mavbridge.py</code>
-        </div>
       </div>
 
-      {/* 遥测 */}
-      <div className="card col-span-5">
-        <div className="card-title">实时遥测</div>
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <TlmCell label="Mode" val={tlm.heartbeat?.mode ?? '—'} />
-          <TlmCell label="Armed" val={armed ? 'ARMED' : 'DISARMED'} color={armed ? 'warn' : 'ok'} />
-          <TlmCell label="GPS Fix" val={tlm.gps ? `${tlm.gps.fix_type} (${tlm.gps.sats}★)` : '—'} />
-          <TlmCell label="Pitch"  val={tlm.attitude ? tlm.attitude.pitch.toFixed(1)+'°' : '—'} />
-          <TlmCell label="Roll"   val={tlm.attitude ? tlm.attitude.roll.toFixed(1)+'°' : '—'} />
-          <TlmCell label="Yaw"    val={tlm.attitude ? tlm.attitude.yaw.toFixed(0)+'°' : '—'} />
-          <TlmCell label="地速"   val={tlm.vfr ? tlm.vfr.groundspeed.toFixed(1)+' m/s' : '—'} highlight />
-          <TlmCell label="气速"   val={tlm.vfr ? tlm.vfr.airspeed.toFixed(1)+' m/s' : '—'} />
-          <TlmCell label="油门"   val={tlm.vfr ? tlm.vfr.throttle+' %' : '—'} />
+      {/* ═══ 行 2: 实时 K + 力平衡 + RC (横排, 互填留空) ═══ */}
+      <div className="card col-span-5 py-2">
+        <div className="flex items-center gap-2 mb-1.5">
+          <TrendingUp size={12} className="text-accent"/>
+          <span className="card-title mb-0 text-[11px]">实时 K 值</span>
+          <span className="text-[10px] text-fg-dim ml-auto">
+            {liveSpd != null ? `FC ${liveSpd.toFixed(1)} m/s` : 'UI 调试'}
+          </span>
         </div>
-        {tlm.rc && (
-          <>
-            <div className="card-section">RC 通道 (CH1-8)</div>
-            <div className="grid grid-cols-8 gap-1">
-              {tlm.rc.map((v, i) => (
-                <div key={i} className="text-center">
-                  <div className="text-[9px] text-fg-dim">CH{i+1}</div>
-                  <div className="val-mono text-[10px]">{v}</div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* 操作 */}
-      <div className="card col-span-3">
-        <div className="card-title">Arm / Reboot</div>
-        <div className="space-y-2">
-          {!armed ? (
-            <button className="btn btn-primary w-full" onClick={() => gcs.arm()} disabled={!connected}>
-              <Unlock size={12} className="inline mr-1" /> Arm
-            </button>
-          ) : (
-            <button className="btn btn-warn w-full" onClick={() => gcs.disarm()} disabled={!connected}>
-              <Lock size={12} className="inline mr-1" /> Disarm
-            </button>
-          )}
-          <button className="btn w-full" onClick={() => {
-            if (confirm('重启飞控 (FC reboot)?')) gcs.reboot();
-          }} disabled={!connected}>
-            <RefreshCcw size={12} className="inline mr-1" /> Reboot FC
-          </button>
-        </div>
-      </div>
-
-      {/* 参数同步 */}
-      <div className="card col-span-6">
-        <div className="card-title">参数同步 — {Object.keys(DEFAULT_PARAMS).length} 个 MSK_/TLT_/GRD_/PRE_/MGEO_/TLTC_</div>
-        <div className="flex gap-2 mb-3">
-          <button className="btn btn-primary flex-1" onClick={pullAll} disabled={!connected || syncMode !== 'none'}>
-            <Download size={12} className="inline mr-1" />
-            从 FC 拉取 {syncMode === 'pulling' && `(${stats.pullCount}/${stats.pullTotal || '?'})`}
-          </button>
-          <button className="btn btn-primary flex-1" onClick={pushAll} disabled={!connected || syncMode !== 'none' || armed}>
-            <Upload size={12} className="inline mr-1" />
-            推送到 FC {syncMode === 'pushing' && `(${stats.pushCount})`}
-          </button>
-        </div>
-        {armed && (
-          <div className="text-[10px] text-warn mb-2">⚠ 飞控已解锁, 禁止推送参数. 先 Disarm.</div>
-        )}
-        <div className="text-[10px] text-fg-mute space-y-0.5">
-          <div>• 拉取: 发 param_read × {Object.keys(DEFAULT_PARAMS).length} 路, ~{(Object.keys(DEFAULT_PARAMS).length*0.05).toFixed(1)}s 完成 (filter MSK/TLT/GRD/PRE/MGEO/TLTC)</div>
-          <div>• 推送: PARAM_SET × {Object.keys(DEFAULT_PARAMS).length}, FC 会 ACK 回 PARAM_VALUE (覆盖本地值)</div>
-          <div>• 慢速串口 (57600) 用全量 param_request_list 太慢, 本工具走命名读</div>
-        </div>
-      </div>
-
-      {/* STATUSTEXT 日志 */}
-      <div className="card col-span-6">
-        <div className="card-title flex items-center gap-2">
-          <Terminal size={14} />STATUSTEXT 日志 (Lua send_text + FC 系统消息)
-        </div>
-        <div ref={logRef} className="bg-bg-100 border border-line rounded p-2 h-48 overflow-auto text-[10px] font-mono space-y-0.5">
-          {log.length === 0 && <div className="text-fg-dim">暂无消息 · 连接后 FC 的 STATUSTEXT 会在这里显示</div>}
-          {log.map((l, i) => (
-            <div key={i} className={sevColor(l.sev)}>
-              <span className="text-fg-dim">[{new Date(l.ts).toLocaleTimeString()}]</span>{' '}
-              <span className="text-fg-dim">[{l.sev}]</span>{' '}
-              {l.text}
+        <div className="space-y-1">
+          {(['KS','KDF','KT','KRD'] as GroupKey[]).map(g => (
+            <div key={g} className="flex items-center gap-2">
+              <span className="val-mono text-[10px] w-8" style={{ color: GROUP_COLORS[g] }}>{g}</span>
+              <span className="text-fg-mute text-[9px] w-14 truncate">{GROUP_LABELS[g]}</span>
+              <div className="h-1.5 bg-panel-2 rounded overflow-hidden flex-1">
+                <div className="h-full transition-all" style={{ width: (liveK[g]*100)+'%', background: GROUP_COLORS[g] }} />
+              </div>
+              <span className="val-mono text-[10px] w-9 text-right">{(liveK[g]*100).toFixed(0)}%</span>
             </div>
           ))}
         </div>
-        <div className="text-[9px] text-fg-dim mt-1">
-          重点看: MSK CHK (预检) · MSK K: (1Hz 心跳) · MSK tilt saturation (舵机饱和)
+      </div>
+
+      <div className="card col-span-3 py-2">
+        <div className="card-title text-[11px] mb-1.5">力平衡</div>
+        <div className="grid grid-cols-2 gap-1.5 text-center">
+          <div className="bg-panel-2 rounded py-1">
+            <div className="text-[8px] text-fg-mute">总推力</div>
+            <div className="val-mono text-[13px]">{liveTotalThrust.toFixed(0)}<span className="text-fg-dim text-[8px] ml-0.5">N</span></div>
+          </div>
+          <div className="bg-panel-2 rounded py-1">
+            <div className="text-[8px] text-fg-mute">机重</div>
+            <div className="val-mono text-[13px]">{VEHICLE_WEIGHT_N}<span className="text-fg-dim text-[8px] ml-0.5">N</span></div>
+          </div>
+          <div className="bg-panel-2 rounded py-1">
+            <div className="text-[8px] text-fg-mute">T/W</div>
+            <div className={'val-mono text-[13px] ' + (liveTW < 1 ? 'text-err' : liveTW < 1.5 ? 'text-warn' : 'text-ok')}>{liveTW.toFixed(2)}</div>
+          </div>
+          <div className="bg-panel-2 rounded py-1">
+            <div className="text-[8px] text-fg-mute">富余</div>
+            <div className={'val-mono text-[13px] ' + (liveTotalThrust-VEHICLE_WEIGHT_N < 0 ? 'text-err' : liveTotalThrust-VEHICLE_WEIGHT_N < 20 ? 'text-warn' : 'text-ok')}>
+              {liveTotalThrust-VEHICLE_WEIGHT_N >= 0 ? '+' : ''}{(liveTotalThrust-VEHICLE_WEIGHT_N).toFixed(0)}<span className="text-fg-dim text-[8px] ml-0.5">N</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="card col-span-4 py-2">
+        <div className="card-title text-[11px] mb-1.5 flex items-center gap-1.5">
+          <span>RC 通道</span>
+          {!tlm.rc && <span className="text-[9px] text-fg-dim font-normal">(未连或无 RC 数据)</span>}
+        </div>
+        <div className="grid grid-cols-5 gap-0.5">
+          {(tlm.rc ?? Array(10).fill(0)).slice(0, 10).map((v, i) => (
+            <div key={i} className={'text-center bg-panel-2 rounded py-0.5 ' + (!tlm.rc ? 'opacity-30' : '')}>
+              <div className="text-[8px] text-fg-dim leading-tight">CH{i+1}</div>
+              <div className="val-mono text-[10px]">{tlm.rc ? v : '—'}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ═══ 行 3: STATUSTEXT 占满 ═══ */}
+      <div className="card col-span-12 py-2">
+        <div className="flex items-center mb-1">
+          <Terminal size={12} className="mr-1.5" />
+          <span className="card-title text-[11px] mb-0">STATUSTEXT 日志</span>
+          <span className="text-[9px] text-fg-dim ml-2">MSK CHK / K 心跳 / tilt saturation</span>
+          {armed && <span className="ml-auto text-[9px] text-warn">⚠ FC 已 armed, 禁推参数</span>}
+        </div>
+        <div ref={logRef} className="bg-bg-100 border border-line rounded p-1.5 h-40 overflow-auto text-[10px] font-mono space-y-0.5">
+          {log.length === 0 && <div className="text-fg-dim">暂无消息</div>}
+          {log.map((l, i) => (
+            <div key={i} className={sevColor(l.sev)}>
+              <span className="text-fg-dim">[{new Date(l.ts).toLocaleTimeString()}]</span>{' '}
+              {l.text}
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -214,9 +257,9 @@ function TlmCell({ label, val, color, highlight }: { label: string; val: string;
   const cls = color === 'ok' ? 'text-ok' : color === 'warn' ? 'text-warn' : color === 'err' ? 'text-err' :
               highlight ? 'text-accent' : 'text-fg';
   return (
-    <div className="bg-panel-2 rounded p-2 text-center">
-      <div className="text-[9px] text-fg-mute">{label}</div>
-      <div className={'val-mono text-[13px] ' + cls}>{val}</div>
+    <div className="bg-panel-2 rounded px-1.5 py-0.5 text-center min-w-[44px]">
+      <div className="text-[8px] text-fg-mute leading-none">{label}</div>
+      <div className={'val-mono text-[11px] leading-tight ' + cls}>{val}</div>
     </div>
   );
 }

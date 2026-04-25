@@ -29,19 +29,24 @@ export function Preflight() {
 
   const STAGES: Array<{ name: string; subs: string[]; hint: string }> = [
     {
-      name: 'STAGE 1: TILT SWEEP ±' + swing + '°',
+      name: 'STAGE 1: MOTOR GROUPS',
+      subs: ['S 斜吹 (KS)', 'DF 前下吹 (KDF)', 'T 后推 (KT)', 'RD 后斜下 (KRD)'],
+      hint: '4 组依次怠速, 每组 grp_ms. tilt 全归 abs=45°',
+    },
+    {
+      name: 'STAGE 2: TILT SWEEP ±' + swing + '°',
       subs: buildTiltSubs(swing),
-      hint: '7 路 tilt 依次 ±swing° 扫描. S 摆动时 DFL/DFR 应反向补偿轻微移动 (软解耦验证)',
+      hint: '7 路 tilt 依次 ±swing° 扫描 (中立 abs=45°). S 摆动时 DFL/DFR 反向补偿 (软解耦验证)',
     },
     {
-      name: 'STAGE 2: STAB FEEDBACK',
+      name: 'STAGE 3: STAB FEEDBACK',
       subs: ['pitch+', 'pitch−', 'roll+', 'roll−', 'yaw+', 'yaw−'],
-      hint: 'GEOM 反推应激活的电机, 怠速 PWM=PRE_PWM',
+      hint: 'GEOM 反推应激活的电机怠速, 验证混控方向',
     },
     {
-      name: 'STAGE 3: STICK CHECK',
-      subs: ['pilot 动摇杆, 正反馈电机怠速 (无限时, 关 CHK 退出)'],
-      hint: 'STAGE 2 与 3 必须激活同一组电机 — 交叉验证 GEOM 方向',
+      name: 'STAGE 4: STICK CHECK',
+      subs: ['pilot 摇杆遥控, 正反馈电机怠速 (无限时, 关 CHK 退出)'],
+      hint: 'STAGE 3 与 4 必须激活同一组电机 — 交叉验证混控方向. 读 RC pitch/roll/yaw → mixer',
     },
   ];
 
@@ -102,7 +107,7 @@ export function Preflight() {
 
       {/* 模拟播放 */}
       <div className="card col-span-7">
-        <div className="card-title">3 阶段模拟播放</div>
+        <div className="card-title">4 阶段模拟播放 (v7 兼容)</div>
 
         <div className="flex items-center gap-2 mb-3">
           {!playing ? (

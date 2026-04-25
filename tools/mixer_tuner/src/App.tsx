@@ -5,8 +5,7 @@ import { gcs, GcsMessage } from './lib/gcs';
 import { quantize } from './lib/defaults';
 import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
-import { Gauge, Waves, Sliders, Grid3x3, Scale, PlayCircle, Settings, PlugZap } from 'lucide-react';
-import { Overview } from './components/tabs/Overview';
+import { Waves, Sliders, Grid3x3, Scale, PlayCircle, Settings, PlugZap } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
 import { Tilts } from './components/tabs/Tilts';
 import { Geometry } from './components/tabs/Geometry';
@@ -16,13 +15,12 @@ import { Params } from './components/tabs/Params';
 import { Gcs } from './components/tabs/Gcs';
 
 const TABS = [
-  { id: 'overview',  label: '总览',         Icon: Gauge },
+  { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
   { id: 'profile',   label: '曲线 & 阶段',  Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
   { id: 'geometry',  label: '几何 & 布局',  Icon: Grid3x3 },
   { id: 'force',     label: '力平衡',       Icon: Scale },
   { id: 'preflight', label: '预检',         Icon: PlayCircle },
-  { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
   { id: 'params',    label: '参数',         Icon: Settings },
 ];
 
@@ -58,15 +56,14 @@ export default function App() {
 
   const panel = (() => {
     switch (currentTab) {
-      case 'overview':  return <Overview currentK={currentK} effectiveSpeed={effectiveSpeed} />;
+      case 'gcs':       return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
       case 'profile':   return <FlightProfile effectiveSpeed={effectiveSpeed} currentK={currentK} />;
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry currentK={currentK} />;
       case 'force':     return <Force currentK={currentK} />;
       case 'preflight': return <Preflight />;
-      case 'gcs':       return <Gcs />;
       case 'params':    return <Params />;
-      default: return null;
+      default: return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
     }
   })();
 

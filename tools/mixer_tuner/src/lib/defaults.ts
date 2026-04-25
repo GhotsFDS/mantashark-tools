@@ -4,8 +4,10 @@ import type { ParamSet } from './types';
 export const DEFAULT_PARAMS: ParamSet = {
   // ═══ MSK_ (mixer, key=81) ═══
   MSK_V1: 4.0,  MSK_V2: 8.0,  MSK_V3: 14.0,  MSK_V_MAX: 20.0,
+  MSK_GEAR_CH: 7,                                 // v7 三档开关 RC 通道
+  // LOG164 实测有效值 (V1=4 V2=8 V3=14 V_MAX=20). 5 控制点 PCHIP 插值.
   MSK_KS0:  0.70, MSK_KS1:  0.70, MSK_KS2:  0.55, MSK_KS3:  0.10, MSK_KS4:  0.10,
-  MSK_KDF0: 0.80, MSK_KDF1: 0.90, MSK_KDF2: 0.65, MSK_KDF3: 0.08, MSK_KDF4: 0.08,
+  MSK_KDF0: 0.80, MSK_KDF1: 0.80, MSK_KDF2: 0.65, MSK_KDF3: 0.08, MSK_KDF4: 0.08,
   MSK_KT0:  0.40, MSK_KT1:  0.40, MSK_KT2:  0.85, MSK_KT3:  0.65, MSK_KT4:  0.65,
   MSK_KRD0: 0.65, MSK_KRD1: 0.70, MSK_KRD2: 0.85, MSK_KRD3: 0.25, MSK_KRD4: 0.25,
 
@@ -13,14 +15,14 @@ export const DEFAULT_PARAMS: ParamSet = {
   TLT_CPL_SDF_K:   0.30,
   TLT_PWM_PER_DEG: 11.11,   // 90° 舵机 @ 1000-2000μs 标准值
   TLT_T1_DEG:      15.0,
-  // LMIN/LMAX 都是绝对物理角度 (0=垂直 / 45=中立 / 90=水平). 中立 PWM=ZERO=1500.
-  TLT_DFL_ZERO:  1500, TLT_DFL_DIR:  1, TLT_DFL_LMIN:  0, TLT_DFL_LMAX:  90,
-  TLT_DFR_ZERO:  1500, TLT_DFR_DIR: -1, TLT_DFR_LMIN:  0, TLT_DFR_LMAX:  90,
-  TLT_TL1_ZERO:  1500, TLT_TL1_DIR:  1, TLT_TL1_LMIN: 30, TLT_TL1_LMAX:  60,
-  TLT_TR1_ZERO:  1500, TLT_TR1_DIR: -1, TLT_TR1_LMIN: 30, TLT_TR1_LMAX:  60,
-  TLT_RDL_ZERO:  1500, TLT_RDL_DIR:  1, TLT_RDL_LMIN: 15, TLT_RDL_LMAX:  45,
-  TLT_RDR_ZERO:  1500, TLT_RDR_DIR: -1, TLT_RDR_LMIN: 15, TLT_RDR_LMAX:  45,
-  TLT_SGRP_ZERO: 1500, TLT_SGRP_DIR: 1, TLT_SGRP_LMIN: 0, TLT_SGRP_LMAX: 90,
+  // LMIN/LMAX 是 *偏移量* offset = abs - 45 (中立 0). 范围 -180..+180, |LMIN|+|LMAX|≤180.
+  TLT_DFL_ZERO:  1500, TLT_DFL_DIR:  1, TLT_DFL_LMIN: -45, TLT_DFL_LMAX:  45,
+  TLT_DFR_ZERO:  1500, TLT_DFR_DIR: -1, TLT_DFR_LMIN: -45, TLT_DFR_LMAX:  45,
+  TLT_TL1_ZERO:  1500, TLT_TL1_DIR:  1, TLT_TL1_LMIN: -15, TLT_TL1_LMAX:  15,
+  TLT_TR1_ZERO:  1500, TLT_TR1_DIR: -1, TLT_TR1_LMIN: -15, TLT_TR1_LMAX:  15,
+  TLT_RDL_ZERO:  1500, TLT_RDL_DIR:  1, TLT_RDL_LMIN: -30, TLT_RDL_LMAX:   0,
+  TLT_RDR_ZERO:  1500, TLT_RDR_DIR: -1, TLT_RDR_LMIN: -30, TLT_RDR_LMAX:   0,
+  TLT_SGRP_ZERO: 1500, TLT_SGRP_DIR: 1, TLT_SGRP_LMIN:-45, TLT_SGRP_LMAX:  45,
 
   // ═══ MGEO_ (mixer geometry, key=83) — 12 motor × pitch/roll/yaw = 36 ═══
   MGEO_SL1_P: 0.5, MGEO_SL1_R:  0.3, MGEO_SL1_Y: 0,
@@ -38,15 +40,17 @@ export const DEFAULT_PARAMS: ParamSet = {
 
   // ═══ TLTC_ (tilt curve, 7 路 × 5 控制点 K, V 共用 MSK_V*) = 35 ═══
   // 绝对物理角度 (0=垂直水面, 45=中立, 90=水平水面).
-  // 5 控制点对应 V0=0, V1, V2, V3, V_MAX. 与 phases.lua PHASE_CONFIG 对齐.
-  // V0  V1  V2  V3  V_MAX  (STATIONARY / TAXI / CUSHION / GE / V_MAX)
+  // 5 控制点 V0=0, V1, V2, V3, V_MAX. 默认基于 LOG164+v7 三档经验:
+  //   V0~V1 慢速: 全中立 (45)
+  //   V1~V2 驼峰: S 上抬 (75) + RD 下吹 (20) 抬尾建气垫
+  //   V2~V3+ 巡航: 渐回中立, DF 微抬头
   TLTC_DFL_K0:  45, TLTC_DFL_K1:  45, TLTC_DFL_K2:  55, TLTC_DFL_K3:  50, TLTC_DFL_K4:  45,
   TLTC_DFR_K0:  45, TLTC_DFR_K1:  45, TLTC_DFR_K2:  55, TLTC_DFR_K3:  50, TLTC_DFR_K4:  45,
   TLTC_TL1_K0:  45, TLTC_TL1_K1:  45, TLTC_TL1_K2:  45, TLTC_TL1_K3:  45, TLTC_TL1_K4:  45,
   TLTC_TR1_K0:  45, TLTC_TR1_K1:  45, TLTC_TR1_K2:  45, TLTC_TR1_K3:  45, TLTC_TR1_K4:  45,
-  TLTC_RDL_K0:  45, TLTC_RDL_K1:  15, TLTC_RDL_K2:  30, TLTC_RDL_K3:  45, TLTC_RDL_K4:  45,
-  TLTC_RDR_K0:  45, TLTC_RDR_K1:  15, TLTC_RDR_K2:  30, TLTC_RDR_K3:  45, TLTC_RDR_K4:  45,
-  TLTC_SGRP_K0: 45, TLTC_SGRP_K1: 90, TLTC_SGRP_K2: 60, TLTC_SGRP_K3: 45, TLTC_SGRP_K4: 45,
+  TLTC_RDL_K0:  45, TLTC_RDL_K1:  20, TLTC_RDL_K2:  30, TLTC_RDL_K3:  45, TLTC_RDL_K4:  45,
+  TLTC_RDR_K0:  45, TLTC_RDR_K1:  20, TLTC_RDR_K2:  30, TLTC_RDR_K3:  45, TLTC_RDR_K4:  45,
+  TLTC_SGRP_K0: 45, TLTC_SGRP_K1: 75, TLTC_SGRP_K2: 60, TLTC_SGRP_K3: 45, TLTC_SGRP_K4: 45,
 
   // ═══ 布局位置 (用户可拖拽保存, 覆盖 actuators.ts 默认) ═══
   // 约定 (Y 取反后匹配用户偏好): -Y 前 (wide wings 在下), +Y 后 (chassis 在上)
@@ -112,7 +116,7 @@ export function paramRange(key: string) {
   if (/^MSK_K/.test(key)) return { min: 0, max: 1, step: 0.01 };
   if (/^TLT_.*_ZERO$/.test(key)) return { min: 500, max: 2500, step: 1 };
   if (/^TLT_.*_DIR$/.test(key)) return { min: -1, max: 1, step: 2 };
-  if (/^TLT_.*_LMIN$/.test(key)) return { min: 0, max: 180, step: 1 };
+  if (/^TLT_.*_LMIN$/.test(key)) return { min: -180, max: 0, step: 1 };
   if (/^TLT_.*_LMAX$/.test(key)) return { min: 0, max: 180, step: 1 };
   if (/^MGEO_.*_[PRY]$/.test(key)) return { min: -1, max: 1, step: 0.05 };
   if (/^TLTC_.*_K[0-4]$/.test(key)) return { min: 0, max: 180, step: 1 };
@@ -123,10 +127,11 @@ export function paramRange(key: string) {
 // ═══ 参数中文说明 (用于 Params tab 旁注 / tooltip) ═══
 export const PARAM_LABELS: Record<string, string> = {
   // ─── MSK_ 速度断点 + K 曲线 ───
-  MSK_V1:    '速度断点 V1 (m/s) — TAXI 驼峰下界',
-  MSK_V2:    '速度断点 V2 (m/s) — CUSHION→GE 切换',
+  MSK_V1:    '速度断点 V1 (m/s) — 档1 速度上限',
+  MSK_V2:    '速度断点 V2 (m/s) — 档2 速度上限 (驼峰)',
   MSK_V3:    '速度断点 V3 (m/s) — 巡航高速',
   MSK_V_MAX: '最大速度 (m/s) — 曲线末端',
+  MSK_GEAR_CH:'三档开关 RC 通道 (PWM<1300=档1, <1700=档2, ≥1700=档3)',
   // KS/KDF/KT/KRD 五点
   MSK_KS0: 'S 斜吹 V0 油门系数',  MSK_KS1: 'S 斜吹 V1 油门系数',  MSK_KS2: 'S 斜吹 V2',  MSK_KS3: 'S 斜吹 V3',  MSK_KS4: 'S 斜吹 V_MAX',
   MSK_KDF0:'DF 前下吹 V0',         MSK_KDF1:'DF 前下吹 V1',         MSK_KDF2:'DF 前下吹 V2',MSK_KDF3:'DF 前下吹 V3',MSK_KDF4:'DF 前下吹 V_MAX',

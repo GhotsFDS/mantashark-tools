@@ -8,7 +8,24 @@ from PyInstaller.utils.hooks import collect_submodules
 hiddenimports = []
 hiddenimports += collect_submodules('pymavlink')
 hiddenimports += collect_submodules('serial')
-hiddenimports += ['websockets', 'websockets.legacy', 'websockets.legacy.server']
+# 显式补 PyInstaller 偶尔漏的: pyserial 平台后端 + websockets 异步路径
+hiddenimports += [
+    'serial.tools.list_ports',
+    'serial.tools.list_ports_common',
+    'serial.tools.list_ports_windows',
+    'serial.tools.list_ports_posix',
+    'serial.tools.list_ports_linux',
+    'serial.tools.list_ports_osx',
+    'websockets',
+    'websockets.legacy',
+    'websockets.legacy.server',
+    'websockets.legacy.protocol',
+    'websockets.asyncio',
+    'websockets.asyncio.server',
+    'pymavlink.dialects.v20.ardupilotmega',
+    'pymavlink.dialects.v20.all',
+    'pkg_resources',
+]
 
 a = Analysis(
     ['mavbridge.py'],

@@ -154,9 +154,11 @@ export function Geometry({ currentK }: Props) {
             </thead>
             <tbody>
               {TILTS.map(t => {
-                // 读软限位参数 (TLT_*_LMIN/LMAX), 回退 t.range
-                const lmin = params[`TLT_${t.alias}_LMIN`] ?? t.range[0];
-                const lmax = params[`TLT_${t.alias}_LMAX`] ?? t.range[1];
+                // LMIN/LMAX 是 offset, 转 abs 给滑杆
+                const lminOff = params[`TLT_${t.alias}_LMIN`] ?? -45;
+                const lmaxOff = params[`TLT_${t.alias}_LMAX`] ?? 45;
+                const lmin = 45 + lminOff;
+                const lmax = 45 + lmaxOff;
                 const v = analysisTilts[t.id];
                 const pwm = tiltToPwm(t.id, v);
                 const sat = pwm === 500 || pwm === 2500;
@@ -295,7 +297,7 @@ export function Geometry({ currentK }: Props) {
         <div className="grid grid-cols-3 gap-3">
           <ResultCard label="被动带动量 (机械耦合)" val={(passiveDf >= 0 ? '+' : '') + passiveDf.toFixed(1)} unit="°" />
           <ResultCard label="补偿后 DFL/DFR 命令 (abs)" val={finalDf.toFixed(1)} unit="°" warn={dfSat} />
-          <ResultCard label="DFL/DFR 软限 (abs)" val={`[${dfLmin},${dfLmax}]°`} unit="" hint={`PER_DEG=${perDeg.toFixed(2)}μs/°`} />
+          <ResultCard label="DFL/DFR 软限 (offset)" val={`[${dfLmin},${dfLmax >0?'+':''}${dfLmax}]°`} unit="" hint={`abs [${45+dfLmin},${45+dfLmax}]°`} />
         </div>
         {dfSat && (
           <div className="mt-2 flex items-center gap-2 bg-warn/15 border border-warn px-3 py-2 rounded text-warn text-[10px]">

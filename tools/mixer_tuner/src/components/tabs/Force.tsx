@@ -6,10 +6,13 @@ import { useStore } from '../../store/useStore';
 interface Props { currentK: Record<GroupKey, number>; }
 
 export function Force({ currentK }: Props) {
-  const { currentSpeed } = useStore();
-  const kmax = Math.max(currentK.KS, currentK.KDF, currentK.KT, currentK.KRD, 1e-6);
+  const { currentSpeed, setSpeed, currentGear, setGear, params } = useStore();
+  // K 不归一化 (与 Lua mixer 保持一致, K=1.0 即 100% 油门)
   const kn: Record<GroupKey, number> = {
-    KS: currentK.KS/kmax, KDF: currentK.KDF/kmax, KT: currentK.KT/kmax, KRD: currentK.KRD/kmax,
+    KS: Math.min(1, Math.max(0, currentK.KS)),
+    KDF: Math.min(1, Math.max(0, currentK.KDF)),
+    KT: Math.min(1, Math.max(0, currentK.KT)),
+    KRD: Math.min(1, Math.max(0, currentK.KRD)),
   };
 
   const byGroup = useMemo(() => {
@@ -34,6 +37,27 @@ export function Force({ currentK }: Props) {
     <div className="grid grid-cols-12 gap-3">
       <div className="card col-span-5">
         <div className="card-title">力平衡 @ {currentSpeed.toFixed(1)} m/s</div>
+
+        {/* 速度 + 档位 (调试用滑杆) */}
+        <div className="mb-3 p-2 bg-panel-2 rounded">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="label">速度 (调试)</span>
+            <span className="val-mono ml-auto text-accent">{currentSpeed.toFixed(1)}</span>
+            <span className="text-fg-dim text-[10px]">m/s</span>
+          </div>
+          <input type="range" min={0} max={params.MSK_V_MAX ?? 20} step={0.1}
+                 value={currentSpeed}
+                 onChange={e => setSpeed(parseFloat(e.target.value))}
+                 className="slider w-full" />
+          <div className="flex gap-1 mt-2">
+            {[1,2,3].map(g => (
+              <button key={g} onClick={() => setGear(g as 1|2|3)}
+                      className={'btn flex-1 text-[10px] py-0.5 ' + (currentGear === g ? 'btn-primary' : '')}>
+                档{g}{g===1?' V1':g===2?' V2':' 全'}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="space-y-2 my-3">
           <KVRow label="总推力 (100% 油门)" val={totalThrust.toFixed(1)} unit="N" big />

@@ -40,7 +40,8 @@ export interface AppState {
   simulateArmed: boolean;
   selectedCurve: GroupKey;
   selectedTiltCurve: TiltAlias;
-  curveMode: 'k' | 'tilt';
+  curveMode: 'k' | 'tilt' | 'joint';   // joint = K + 关联倾转曲线 (仅当前组)
+  mergeLR: boolean;          // 倾转曲线: 合并左右 (DFL+DFR / TL1+TR1 / RDL+RDR)
   tiltPreview: Record<TiltId, number>;
   analysisRdTilt: number;
   analysisSGroup: number;
