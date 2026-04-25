@@ -3,7 +3,7 @@ __pycache__/
 *.egg-info/
 build/
 dist/
-*.spec
+# *.spec  # tools/mixer_tuner/mavbridge.spec 需要 tracked
 .venv/
 venv/
 *.bak
