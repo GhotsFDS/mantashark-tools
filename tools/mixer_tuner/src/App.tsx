@@ -2,6 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { useStore } from './store/useStore';
 import { evalCurve } from './lib/pchip';
 import { gcs, GcsMessage } from './lib/gcs';
+import { quantize } from './lib/defaults';
 import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
 import { Gauge, Waves, Sliders, Grid3x3, Scale, PlayCircle, Settings, PlugZap } from 'lucide-react';
@@ -26,17 +27,21 @@ const TABS = [
 ];
 
 export default function App() {
-  const { currentTab, setTab, currentSpeed, currentGear, currentPhase, params, simulateArmed } = useStore();
+  const { currentTab, setTab, currentSpeed, currentGear, currentPhase, params, simulateArmed, setParam } = useStore();
   const [gcsConnected, setGcsConnected] = useState(false);
   const [gcsArmed, setGcsArmed] = useState<boolean | null>(null);
 
+  // ─── App-level GCS listener: 保证不管哪个 tab 打开, PARAM_VALUE 都同步到 store ───
   useEffect(() => {
     const off = gcs.on((m: GcsMessage) => {
       if (m.type === 'status') setGcsConnected(m.connected);
       else if (m.type === 'heartbeat') setGcsArmed(m.armed);
+      else if (m.type === 'param') {
+        if (m.name in params) setParam(m.name, quantize(m.name, m.value));
+      }
     });
     return () => { off(); };
-  }, []);
+  }, [params, setParam]);
 
   const effectiveSpeed = useMemo(() => {
     if (currentGear === 1) return Math.min(currentSpeed, params.MSK_V1);

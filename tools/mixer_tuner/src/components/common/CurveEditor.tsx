@@ -97,14 +97,15 @@ export function CurveEditor({ effectiveSpeed, height = 460, mode = 'k', showAll 
     }));
   }, [mode]);
 
-  const yMin = mode === 'k' ? 0 : -180;
+  // tilt 模式: 绝对物理角度 0..180° (45° = 中立).
+  const yMin = mode === 'k' ? 0 : 0;
   const yMax = mode === 'k' ? 1.1 : 180;
-  const yLabel = mode === 'k' ? 'K' : '°';
+  const yLabel = mode === 'k' ? 'K' : '° abs';
   const yStep = mode === 'k' ? 0.2 : 30;
   const ySnap = mode === 'k' ? 0.01 : 1;
   const yLabelFmt = mode === 'k'
     ? (v: number) => v.toFixed(2)
-    : (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(0)}`;
+    : (v: number) => v.toFixed(0);
 
   const selectedSid = mode === 'k' ? selectedCurve : selectedTiltCurve;
   const setSelectedSid = (sid: string) => {
@@ -187,10 +188,12 @@ export function CurveEditor({ effectiveSpeed, height = 460, mode = 'k', showAll 
     for (let y = yMin; y <= yMax; y += yStep) {
       ctx.beginPath(); ctx.moveTo(PADDING.left, ty(y)); ctx.lineTo(W - PADDING.right, ty(y)); ctx.stroke();
     }
-    // 0 线 (倾转模式特别加粗)
+    // 中立线 (倾转模式 45° 加粗)
     if (mode === 'tilt') {
-      ctx.strokeStyle = '#2a3342'; ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(PADDING.left, ty(0)); ctx.lineTo(W - PADDING.right, ty(0)); ctx.stroke();
+      ctx.strokeStyle = '#56d36480'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(PADDING.left, ty(45)); ctx.lineTo(W - PADDING.right, ty(45)); ctx.stroke();
+      ctx.fillStyle = '#56d364'; ctx.font = '9px monospace'; ctx.textAlign = 'left';
+      ctx.fillText('45° 中立', PADDING.left + 4, ty(45) - 3);
     }
     for (let v = 0; v <= params.MSK_V_MAX; v += 2) {
       ctx.strokeStyle = '#1d232e'; ctx.lineWidth = 1;

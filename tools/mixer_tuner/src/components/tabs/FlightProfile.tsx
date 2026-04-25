@@ -3,6 +3,8 @@ import { CurveEditor } from '../common/CurveEditor';
 import { useStore } from '../../store/useStore';
 import type { GroupKey, TiltAlias } from '../../lib/types';
 import { TILT_IDS, PHASES, GROUP_COLORS, TILTS } from '../../lib/actuators';
+import { gcs } from '../../lib/gcs';
+import { Upload, Download } from 'lucide-react';
 
 interface Props {
   effectiveSpeed: number;
@@ -23,9 +25,63 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
   const { params, setParam, selectedCurve, selectedTiltCurve, setPhaseConfig,
           phaseConfig, currentPhase, currentSpeed, setSpeed, simulateArmed,
           curveMode, setCurveMode } = useStore();
+  // 监听 GCS 状态用于按钮 disabled
+  const [gcsConnected, setGcsConnected] = React.useState(gcs.isConnected());
+  React.useEffect(() => {
+    const off = gcs.on(m => { if (m.type === 'status') setGcsConnected(m.connected); });
+    setGcsConnected(gcs.isConnected());
+    return () => { off(); };
+  }, []);
 
   const V1 = params.MSK_V1, V2 = params.MSK_V2;
   const isK = curveMode === 'k';
+
+  // 当前 mode 涉及的参数 keys
+  const curveKeys = React.useMemo(() => {
+    if (isK) {
+      const ks: string[] = ['MSK_V1','MSK_V2','MSK_V3','MSK_V_MAX'];
+      for (const g of ['KS','KDF','KT','KRD']) {
+        for (let i=0; i<5; i++) ks.push(`MSK_${g}${i}`);
+      }
+      return ks;
+    } else {
+      const ks: string[] = [];
+      for (const t of TILTS) for (let i=0; i<5; i++) ks.push(`TLTC_${t.alias}_K${i}`);
+      return ks;
+    }
+  }, [isK]);
+
+  const [syncBusy, setSyncBusy] = React.useState<null | { mode:'pull'|'push'; got:number; total:number; msg?:string }>(null);
+
+  const saveCurves = async () => {
+    if (syncBusy) return;
+    if (!gcs.isConnected()) {
+      setSyncBusy({ mode:'push', got:0, total:0, msg:'❌ 未连接 FC, 先去 GCS tab 连接' });
+      setTimeout(() => setSyncBusy(null), 2500);
+      return;
+    }
+    const map: Record<string, number> = {};
+    for (const k of curveKeys) if (k in params) map[k] = params[k];
+    setSyncBusy({ mode:'push', got:0, total:Object.keys(map).length });
+    const r = await gcs.pushParams(map, (s, t) => setSyncBusy({ mode:'push', got:s, total:t }));
+    setSyncBusy({ mode:'push', got:r.acked, total:Object.keys(map).length,
+      msg: r.timedOut ? `⚠ 超时, ack ${r.acked}/${Object.keys(map).length}, 缺 ${r.missing.length}` : `✓ 已保存 ${r.acked} 个曲线参数到 FC` });
+    setTimeout(() => setSyncBusy(null), 2500);
+  };
+
+  const pullCurves = async () => {
+    if (syncBusy) return;
+    if (!gcs.isConnected()) {
+      setSyncBusy({ mode:'pull', got:0, total:0, msg:'❌ 未连接 FC, 先去 GCS tab 连接' });
+      setTimeout(() => setSyncBusy(null), 2500);
+      return;
+    }
+    setSyncBusy({ mode:'pull', got:0, total:curveKeys.length });
+    const r = await gcs.pullParams(curveKeys, (g, t) => setSyncBusy({ mode:'pull', got:g, total:t }));
+    setSyncBusy({ mode:'pull', got:r.got, total:curveKeys.length,
+      msg: r.timedOut ? `⚠ 超时, 收到 ${r.got}/${curveKeys.length}, 缺 ${r.missing.length}` : `✓ 已拉取 ${r.got} 个曲线参数` });
+    setTimeout(() => setSyncBusy(null), 2500);
+  };
 
   return (
     <div className="grid grid-cols-12 gap-3">
@@ -35,18 +91,44 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
           <div className="card-title mb-0 flex-1">
             {isK ? 'K 曲线 (PCHIP 保形插值)' : '倾转曲线 (PCHIP 保形插值)'}
             <span className="ml-2 text-[10px] text-fg-dim font-normal">
-              {isK ? '● 4 组曲线 · 速度 → 油门系数' : '● 7 路 tilt · 速度 → 用户视角角度°'}
+              {isK ? '● 4 组曲线 · 速度 → 油门系数' : '● 7 路 tilt · 速度 → 绝对物理角度 (0=垂直 / 45=中立 / 90=水平)'}
             </span>
           </div>
-          <div className="flex border border-line rounded overflow-hidden">
-            <button
-              className={'px-3 py-1 text-[11px] ' + (isK ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
-              onClick={() => setCurveMode('k')}
-            >K 曲线</button>
-            <button
-              className={'px-3 py-1 text-[11px] border-l border-line ' + (!isK ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
-              onClick={() => setCurveMode('tilt')}
-            >倾转曲线</button>
+          <div className="flex items-center gap-2">
+            {syncBusy && !syncBusy.msg && (
+              <span className="text-[10px] text-accent val-mono">
+                {syncBusy.mode === 'pull' ? '⇣ 拉取中' : '⇡ 保存中'} {syncBusy.got}/{syncBusy.total}
+              </span>
+            )}
+            {syncBusy?.msg && (
+              <span className={'text-[10px] val-mono ' + (syncBusy.msg.startsWith('✓') ? 'text-ok' : 'text-warn')}>
+                {syncBusy.msg}
+              </span>
+            )}
+            <button className="btn text-[11px] py-0.5 px-2"
+                    onClick={pullCurves}
+                    disabled={!!syncBusy || !gcsConnected}
+                    title={gcsConnected ? '从 FC 拉取当前 mode 的曲线参数' : '先连接 FC'}>
+              <Download size={11} className="inline mr-0.5"/>
+              {syncBusy?.mode === 'pull' && !syncBusy.msg ? '拉取中…' : '拉取'}
+            </button>
+            <button className="btn btn-primary text-[11px] py-0.5 px-2"
+                    onClick={saveCurves}
+                    disabled={!!syncBusy || !gcsConnected}
+                    title={gcsConnected ? '把曲线参数推送到 FC (人工保存)' : '先连接 FC'}>
+              <Upload size={11} className="inline mr-0.5"/>
+              {syncBusy?.mode === 'push' && !syncBusy.msg ? '保存中…' : '保存到 FC'}
+            </button>
+            <div className="flex border border-line rounded overflow-hidden">
+              <button
+                className={'px-3 py-1 text-[11px] ' + (isK ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
+                onClick={() => setCurveMode('k')}
+              >K 曲线</button>
+              <button
+                className={'px-3 py-1 text-[11px] border-l border-line ' + (!isK ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
+                onClick={() => setCurveMode('tilt')}
+              >倾转曲线</button>
+            </div>
           </div>
         </div>
         <CurveEditor effectiveSpeed={effectiveSpeed} height={440} showAll={true} mode={curveMode} />
@@ -106,9 +188,9 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
                         @V={[0, V1, V2, params.MSK_V3, params.MSK_V_MAX][i].toFixed(1)}
                       </td>
                       <td className="p-0.5">
-                        <input type="number" min={-180} max={180} step={1}
-                               value={params[k] ?? 0}
-                               onChange={e => setParam(k, parseFloat(e.target.value) || 0)}
+                        <input type="number" min={0} max={180} step={1}
+                               value={params[k] ?? 45}
+                               onChange={e => setParam(k, parseFloat(e.target.value) || 45)}
                                className="input w-full val-mono text-right text-[10px]" />
                       </td>
                     </tr>
@@ -117,7 +199,7 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
               </tbody>
             </table>
             <div className="text-[9px] text-fg-dim mt-2">
-              用户视角: 0=中立, +趋水平, −趋垂直.
+              绝对物理角度: 0°=垂直 / 45°=中立 / 90°=水平.
               软限 [{params[`TLT_${selectedTiltCurve}_LMIN`] ?? '?'},{params[`TLT_${selectedTiltCurve}_LMAX`] ?? '?'}]°
             </div>
           </div>

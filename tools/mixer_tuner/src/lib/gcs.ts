@@ -84,6 +84,76 @@ export class GcsClient {
   reboot()    { this.send({ type: 'reboot' }); }
   ping()      { this.send({ type: 'ping' }); }
 
+  isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }
+
+  // ─── 闭环拉取: 发 read, 等 PARAM_VALUE 回流, 进度回调, 静默超时 ───
+  pullParams(
+    keys: string[],
+    onProgress?: (got: number, total: number) => void,
+    timeoutMs = 8000,
+  ): Promise<{ got: number; missing: string[]; timedOut: boolean }> {
+    return new Promise((resolve) => {
+      if (!this.isConnected()) {
+        resolve({ got: 0, missing: keys, timedOut: false });
+        this.emit({ type: 'error', msg: '未连接 mavbridge.py, 拉取取消' });
+        return;
+      }
+      const remaining = new Set(keys);
+      let got = 0;
+      const off = this.on((m) => {
+        if (m.type === 'param' && remaining.has(m.name)) {
+          remaining.delete(m.name);
+          got++;
+          onProgress?.(got, keys.length);
+          if (remaining.size === 0) finish(false);
+        }
+      });
+      const finish = (timedOut: boolean) => {
+        clearTimeout(timer);
+        off();
+        resolve({ got, missing: [...remaining], timedOut });
+      };
+      const timer = setTimeout(() => finish(true), timeoutMs);
+      // 30ms/次 节流防 ws 拥塞
+      keys.forEach((k, i) => setTimeout(() => this.readParam(k), i * 30));
+    });
+  }
+
+  // ─── 闭环推送: setParam 后等 FC ack (PARAM_VALUE 回流) 或超时 ───
+  pushParams(
+    map: Record<string, number>,
+    onProgress?: (sent: number, total: number) => void,
+    timeoutMs = 8000,
+  ): Promise<{ acked: number; missing: string[]; timedOut: boolean }> {
+    return new Promise((resolve) => {
+      if (!this.isConnected()) {
+        resolve({ acked: 0, missing: Object.keys(map), timedOut: false });
+        this.emit({ type: 'error', msg: '未连接 mavbridge.py, 推送取消' });
+        return;
+      }
+      const keys = Object.keys(map);
+      const remaining = new Set(keys);
+      let acked = 0;
+      const off = this.on((m) => {
+        if (m.type === 'param' && remaining.has(m.name)) {
+          remaining.delete(m.name);
+          acked++;
+          onProgress?.(acked, keys.length);
+          if (remaining.size === 0) finish(false);
+        }
+      });
+      const finish = (timedOut: boolean) => {
+        clearTimeout(timer);
+        off();
+        resolve({ acked, missing: [...remaining], timedOut });
+      };
+      const timer = setTimeout(() => finish(true), timeoutMs);
+      keys.forEach((k, i) =>
+        setTimeout(() => this.setParam(k, map[k]), i * 30)
+      );
+    });
+  }
+
   on(fn: Listener) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
   private emit(m: GcsMessage) { for (const fn of this.listeners) fn(m); }
 }

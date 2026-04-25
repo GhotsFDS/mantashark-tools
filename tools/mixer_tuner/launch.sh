@@ -79,4 +79,26 @@ fi
 # 启动 MAVLink 桥 (前台, 交互式选串口)
 echo
 echo "═════ 启动 mavbridge.py ─ 选串口和波特率 ═════"
-"$PY" -u mavbridge.py
+
+# 检测 dialout 组. 用户在组里但当前 shell 没刷新 (没重登录) → 串口报 Permission denied.
+# 自动用 sg dialout 包一层让子进程拿到组身份.
+NEED_SG=0
+if id -nG | grep -qw dialout; then
+    : # 当前进程已有 dialout
+else
+    if id -nG "$USER" 2>/dev/null | grep -qw dialout; then
+        echo "[launcher] ℹ 当前 shell 没继承 dialout 组 (用户在组里但需重新登录或 newgrp)."
+        echo "[launcher]   自动用 sg dialout 包装启动."
+        NEED_SG=1
+    else
+        echo "[launcher] ⚠ 用户 $USER 不在 dialout 组. 串口可能拒绝访问:"
+        echo "    sudo usermod -aG dialout $USER"
+        echo "    然后重启或 newgrp dialout"
+    fi
+fi
+
+if [ "$NEED_SG" = "1" ] && command -v sg >/dev/null; then
+    sg dialout -c "$PY -u mavbridge.py"
+else
+    "$PY" -u mavbridge.py
+fi

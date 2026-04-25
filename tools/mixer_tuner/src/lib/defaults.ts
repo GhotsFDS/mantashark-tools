@@ -13,13 +13,14 @@ export const DEFAULT_PARAMS: ParamSet = {
   TLT_CPL_SDF_K:   0.30,
   TLT_PWM_PER_DEG: 11.11,   // 90° 舵机 @ 1000-2000μs 标准值
   TLT_T1_DEG:      15.0,
-  TLT_DFL_ZERO:  1500, TLT_DFL_DIR:  1, TLT_DFL_LMIN: -90, TLT_DFL_LMAX: 90,
-  TLT_DFR_ZERO:  1500, TLT_DFR_DIR: -1, TLT_DFR_LMIN: -90, TLT_DFR_LMAX: 90,
-  TLT_TL1_ZERO:  1500, TLT_TL1_DIR:  1, TLT_TL1_LMIN: -15, TLT_TL1_LMAX: 15,
-  TLT_TR1_ZERO:  1500, TLT_TR1_DIR: -1, TLT_TR1_LMIN: -15, TLT_TR1_LMAX: 15,
-  TLT_RDL_ZERO:  1500, TLT_RDL_DIR:  1, TLT_RDL_LMIN:   0, TLT_RDL_LMAX: 30,
-  TLT_RDR_ZERO:  1500, TLT_RDR_DIR: -1, TLT_RDR_LMIN:   0, TLT_RDR_LMAX: 30,
-  TLT_SGRP_ZERO: 1500, TLT_SGRP_DIR: 1, TLT_SGRP_LMIN:  0, TLT_SGRP_LMAX: 90,
+  // LMIN/LMAX 都是绝对物理角度 (0=垂直 / 45=中立 / 90=水平). 中立 PWM=ZERO=1500.
+  TLT_DFL_ZERO:  1500, TLT_DFL_DIR:  1, TLT_DFL_LMIN:  0, TLT_DFL_LMAX:  90,
+  TLT_DFR_ZERO:  1500, TLT_DFR_DIR: -1, TLT_DFR_LMIN:  0, TLT_DFR_LMAX:  90,
+  TLT_TL1_ZERO:  1500, TLT_TL1_DIR:  1, TLT_TL1_LMIN: 30, TLT_TL1_LMAX:  60,
+  TLT_TR1_ZERO:  1500, TLT_TR1_DIR: -1, TLT_TR1_LMIN: 30, TLT_TR1_LMAX:  60,
+  TLT_RDL_ZERO:  1500, TLT_RDL_DIR:  1, TLT_RDL_LMIN: 15, TLT_RDL_LMAX:  45,
+  TLT_RDR_ZERO:  1500, TLT_RDR_DIR: -1, TLT_RDR_LMIN: 15, TLT_RDR_LMAX:  45,
+  TLT_SGRP_ZERO: 1500, TLT_SGRP_DIR: 1, TLT_SGRP_LMIN: 0, TLT_SGRP_LMAX: 90,
 
   // ═══ MGEO_ (mixer geometry, key=83) — 12 motor × pitch/roll/yaw = 36 ═══
   MGEO_SL1_P: 0.5, MGEO_SL1_R:  0.3, MGEO_SL1_Y: 0,
@@ -36,15 +37,16 @@ export const DEFAULT_PARAMS: ParamSet = {
   MGEO_RDR_P: 0,   MGEO_RDR_R: 0,    MGEO_RDR_Y: -0.25,
 
   // ═══ TLTC_ (tilt curve, 7 路 × 5 控制点 K, V 共用 MSK_V*) = 35 ═══
-  // 用户视角 (0 = 中立). 5 控制点对应 V0=0, V1, V2, V3, V_MAX (与 K 曲线共享 V).
-  // 与 phases.lua 默认对齐 (STATIONARY/TAXI/CUSHION/GROUND_EFFECT/V_MAX).
-  TLTC_DFL_K0: 0,  TLTC_DFL_K1: 0,  TLTC_DFL_K2: 10, TLTC_DFL_K3: 5,  TLTC_DFL_K4: 0,
-  TLTC_DFR_K0: 0,  TLTC_DFR_K1: 0,  TLTC_DFR_K2: 10, TLTC_DFR_K3: 5,  TLTC_DFR_K4: 0,
-  TLTC_TL1_K0: 0,  TLTC_TL1_K1: 0,  TLTC_TL1_K2: 0,  TLTC_TL1_K3: 0,  TLTC_TL1_K4: 0,
-  TLTC_TR1_K0: 0,  TLTC_TR1_K1: 0,  TLTC_TR1_K2: 0,  TLTC_TR1_K3: 0,  TLTC_TR1_K4: 0,
-  TLTC_RDL_K0: 0,  TLTC_RDL_K1: 30, TLTC_RDL_K2: 15, TLTC_RDL_K3: 0,  TLTC_RDL_K4: 0,
-  TLTC_RDR_K0: 0,  TLTC_RDR_K1: 30, TLTC_RDR_K2: 15, TLTC_RDR_K3: 0,  TLTC_RDR_K4: 0,
-  TLTC_SGRP_K0: 0, TLTC_SGRP_K1: 45, TLTC_SGRP_K2: 15, TLTC_SGRP_K3: 0, TLTC_SGRP_K4: 0,
+  // 绝对物理角度 (0=垂直水面, 45=中立, 90=水平水面).
+  // 5 控制点对应 V0=0, V1, V2, V3, V_MAX. 与 phases.lua PHASE_CONFIG 对齐.
+  // V0  V1  V2  V3  V_MAX  (STATIONARY / TAXI / CUSHION / GE / V_MAX)
+  TLTC_DFL_K0:  45, TLTC_DFL_K1:  45, TLTC_DFL_K2:  55, TLTC_DFL_K3:  50, TLTC_DFL_K4:  45,
+  TLTC_DFR_K0:  45, TLTC_DFR_K1:  45, TLTC_DFR_K2:  55, TLTC_DFR_K3:  50, TLTC_DFR_K4:  45,
+  TLTC_TL1_K0:  45, TLTC_TL1_K1:  45, TLTC_TL1_K2:  45, TLTC_TL1_K3:  45, TLTC_TL1_K4:  45,
+  TLTC_TR1_K0:  45, TLTC_TR1_K1:  45, TLTC_TR1_K2:  45, TLTC_TR1_K3:  45, TLTC_TR1_K4:  45,
+  TLTC_RDL_K0:  45, TLTC_RDL_K1:  15, TLTC_RDL_K2:  30, TLTC_RDL_K3:  45, TLTC_RDL_K4:  45,
+  TLTC_RDR_K0:  45, TLTC_RDR_K1:  15, TLTC_RDR_K2:  30, TLTC_RDR_K3:  45, TLTC_RDR_K4:  45,
+  TLTC_SGRP_K0: 45, TLTC_SGRP_K1: 90, TLTC_SGRP_K2: 60, TLTC_SGRP_K3: 45, TLTC_SGRP_K4: 45,
 
   // ═══ 布局位置 (用户可拖拽保存, 覆盖 actuators.ts 默认) ═══
   // 约定 (Y 取反后匹配用户偏好): -Y 前 (wide wings 在下), +Y 后 (chassis 在上)
@@ -66,9 +68,28 @@ export const DEFAULT_PARAMS: ParamSet = {
   PRE_STOP:   1000,
   PRE_GRP_MS: 2000,
   PRE_SWING:  10,
+  // PRE_OVR_<ID>: 实时预览覆盖 (Tuner 拖滑杆推送, Lua 主循环读). −1 = 不覆盖.
+  PRE_OVR_DFL:  -1, PRE_OVR_DFR:  -1,
+  PRE_OVR_TL1:  -1, PRE_OVR_TR1:  -1,
+  PRE_OVR_RDL:  -1, PRE_OVR_RDR:  -1,
+  PRE_OVR_SGRP: -1,
 };
 
 export const PARAM_PREFIXES = ['MSK', 'TLT', 'GRD', 'PRE', 'LAY', 'MGEO', 'TLTC'] as const;
+
+// 拉取/推送时跳过的参数 (PRE_OVR_* 是 transient 预览, 不参与同步)
+export const SYNC_SKIP_RE = /^PRE_OVR_/;
+
+// ArduPilot PARAM_VALUE 是 float32 → JS double 转换会出 4.000000095... 之类浮点噪声.
+// 按参数 step 量化 + toFixed 截位, 把 noise 砍掉.
+export function quantize(key: string, value: number): number {
+  if (!Number.isFinite(value)) return value;
+  const step = paramRange(key).step ?? 0.01;
+  if (step <= 0) return value;
+  // step 的有效小数位数 (0.01 → 2, 0.1 → 1, 1 → 0, 0.05 → 2)
+  const decimals = Math.max(0, Math.min(8, -Math.floor(Math.log10(step) - 1e-9)));
+  return Number((Math.round(value / step) * step).toFixed(decimals));
+}
 
 // 参数取值范围提示 (用于表单校验)
 export const PARAM_RANGES: Record<string, { min?: number; max?: number; step?: number }> = {
@@ -91,9 +112,85 @@ export function paramRange(key: string) {
   if (/^MSK_K/.test(key)) return { min: 0, max: 1, step: 0.01 };
   if (/^TLT_.*_ZERO$/.test(key)) return { min: 500, max: 2500, step: 1 };
   if (/^TLT_.*_DIR$/.test(key)) return { min: -1, max: 1, step: 2 };
-  if (/^TLT_.*_LMIN$/.test(key)) return { min: -180, max: 180, step: 1 };
-  if (/^TLT_.*_LMAX$/.test(key)) return { min: -180, max: 180, step: 1 };
+  if (/^TLT_.*_LMIN$/.test(key)) return { min: 0, max: 180, step: 1 };
+  if (/^TLT_.*_LMAX$/.test(key)) return { min: 0, max: 180, step: 1 };
   if (/^MGEO_.*_[PRY]$/.test(key)) return { min: -1, max: 1, step: 0.05 };
-  if (/^TLTC_.*_K[0-4]$/.test(key)) return { min: -180, max: 180, step: 1 };
+  if (/^TLTC_.*_K[0-4]$/.test(key)) return { min: 0, max: 180, step: 1 };
+  if (/^PRE_OVR_/.test(key)) return { min: -1, max: 180, step: 1 };
   return { step: 0.01 };
+}
+
+// ═══ 参数中文说明 (用于 Params tab 旁注 / tooltip) ═══
+export const PARAM_LABELS: Record<string, string> = {
+  // ─── MSK_ 速度断点 + K 曲线 ───
+  MSK_V1:    '速度断点 V1 (m/s) — TAXI 驼峰下界',
+  MSK_V2:    '速度断点 V2 (m/s) — CUSHION→GE 切换',
+  MSK_V3:    '速度断点 V3 (m/s) — 巡航高速',
+  MSK_V_MAX: '最大速度 (m/s) — 曲线末端',
+  // KS/KDF/KT/KRD 五点
+  MSK_KS0: 'S 斜吹 V0 油门系数',  MSK_KS1: 'S 斜吹 V1 油门系数',  MSK_KS2: 'S 斜吹 V2',  MSK_KS3: 'S 斜吹 V3',  MSK_KS4: 'S 斜吹 V_MAX',
+  MSK_KDF0:'DF 前下吹 V0',         MSK_KDF1:'DF 前下吹 V1',         MSK_KDF2:'DF 前下吹 V2',MSK_KDF3:'DF 前下吹 V3',MSK_KDF4:'DF 前下吹 V_MAX',
+  MSK_KT0: 'T 后推 V0',            MSK_KT1: 'T 后推 V1',            MSK_KT2: 'T 后推 V2',  MSK_KT3: 'T 后推 V3',  MSK_KT4: 'T 后推 V_MAX',
+  MSK_KRD0:'RD 后斜吹 V0',          MSK_KRD1:'RD 后斜吹 V1',          MSK_KRD2:'RD 后斜吹 V2',MSK_KRD3:'RD 后斜吹 V3',MSK_KRD4:'RD 后斜吹 V_MAX',
+
+  // ─── TLT_ 倾转舵标定 (PWM 量) ───
+  TLT_CPL_SDF_K:    'S→DF 软解耦补偿系数 (0..1)',
+  TLT_PWM_PER_DEG:  '舵机角度→PWM 斜率 (μs/°), 90° 舵 ≈11.11',
+  TLT_DFL_ZERO: 'DFL 中立 PWM (abs=45° 时输出)',  TLT_DFL_DIR: 'DFL 方向 (+1 或 −1, abs↑ 时 PWM↑↓)',
+  TLT_DFR_ZERO: 'DFR 中立 PWM',                   TLT_DFR_DIR: 'DFR 方向',
+  TLT_TL1_ZERO: 'TL1 中立 PWM',                   TLT_TL1_DIR: 'TL1 方向',
+  TLT_TR1_ZERO: 'TR1 中立 PWM',                   TLT_TR1_DIR: 'TR1 方向',
+  TLT_RDL_ZERO: 'RDL 中立 PWM',                   TLT_RDL_DIR: 'RDL 方向',
+  TLT_RDR_ZERO: 'RDR 中立 PWM',                   TLT_RDR_DIR: 'RDR 方向',
+  TLT_SGRP_ZERO:'S 组中立 PWM',                    TLT_SGRP_DIR:'S 组方向',
+  TLT_DFL_LMIN: 'DFL 软限位 abs 下界 (°)', TLT_DFL_LMAX: 'DFL 软限位 abs 上界 (°)',
+  TLT_DFR_LMIN: 'DFR 软限位 abs 下界',     TLT_DFR_LMAX: 'DFR 软限位 abs 上界',
+  TLT_TL1_LMIN: 'TL1 软限位 abs 下界',     TLT_TL1_LMAX: 'TL1 软限位 abs 上界',
+  TLT_TR1_LMIN: 'TR1 软限位 abs 下界',     TLT_TR1_LMAX: 'TR1 软限位 abs 上界',
+  TLT_RDL_LMIN: 'RDL 软限位 abs 下界',     TLT_RDL_LMAX: 'RDL 软限位 abs 上界',
+  TLT_RDR_LMIN: 'RDR 软限位 abs 下界',     TLT_RDR_LMAX: 'RDR 软限位 abs 上界',
+  TLT_SGRP_LMIN:'S 组软限位 abs 下界',     TLT_SGRP_LMAX:'S 组软限位 abs 上界',
+
+  // ─── MGEO_ motor 几何系数 ───
+  MGEO_SL1_P:'SL1 pitch 基础系数', MGEO_SL1_R:'SL1 roll',           MGEO_SL1_Y:'SL1 yaw',
+  MGEO_SL2_P:'SL2 pitch',          MGEO_SL2_R:'SL2 roll',           MGEO_SL2_Y:'SL2 yaw',
+  MGEO_SR1_P:'SR1 pitch',          MGEO_SR1_R:'SR1 roll',           MGEO_SR1_Y:'SR1 yaw',
+  MGEO_SR2_P:'SR2 pitch',          MGEO_SR2_R:'SR2 roll',           MGEO_SR2_Y:'SR2 yaw',
+  MGEO_DFL_P:'DFL pitch (中立位)', MGEO_DFL_R:'DFL roll',           MGEO_DFL_Y:'DFL yaw',
+  MGEO_DFR_P:'DFR pitch (中立位)', MGEO_DFR_R:'DFR roll',           MGEO_DFR_Y:'DFR yaw',
+  MGEO_TL1_P:'TL1 pitch',          MGEO_TL1_R:'TL1 roll',           MGEO_TL1_Y:'TL1 yaw (主)',
+  MGEO_TL2_P:'TL2 pitch',          MGEO_TL2_R:'TL2 roll',           MGEO_TL2_Y:'TL2 yaw',
+  MGEO_TR1_P:'TR1 pitch',          MGEO_TR1_R:'TR1 roll',           MGEO_TR1_Y:'TR1 yaw (主)',
+  MGEO_TR2_P:'TR2 pitch',          MGEO_TR2_R:'TR2 roll',           MGEO_TR2_Y:'TR2 yaw',
+  MGEO_RDL_P:'RDL pitch (中立位)', MGEO_RDL_R:'RDL roll',           MGEO_RDL_Y:'RDL yaw',
+  MGEO_RDR_P:'RDR pitch (中立位)', MGEO_RDR_R:'RDR roll',           MGEO_RDR_Y:'RDR yaw',
+
+  // ─── TLTC_ 倾转曲线 ───
+  TLTC_DFL_K0:'DFL@V0 abs°',  TLTC_DFL_K1:'DFL@V1 abs°',  TLTC_DFL_K2:'DFL@V2 abs°',  TLTC_DFL_K3:'DFL@V3 abs°',  TLTC_DFL_K4:'DFL@V_MAX abs°',
+  TLTC_DFR_K0:'DFR@V0',        TLTC_DFR_K1:'DFR@V1',        TLTC_DFR_K2:'DFR@V2',        TLTC_DFR_K3:'DFR@V3',        TLTC_DFR_K4:'DFR@V_MAX',
+  TLTC_TL1_K0:'TL1@V0',        TLTC_TL1_K1:'TL1@V1',        TLTC_TL1_K2:'TL1@V2',        TLTC_TL1_K3:'TL1@V3',        TLTC_TL1_K4:'TL1@V_MAX',
+  TLTC_TR1_K0:'TR1@V0',        TLTC_TR1_K1:'TR1@V1',        TLTC_TR1_K2:'TR1@V2',        TLTC_TR1_K3:'TR1@V3',        TLTC_TR1_K4:'TR1@V_MAX',
+  TLTC_RDL_K0:'RDL@V0',        TLTC_RDL_K1:'RDL@V1',        TLTC_RDL_K2:'RDL@V2',        TLTC_RDL_K3:'RDL@V3',        TLTC_RDL_K4:'RDL@V_MAX',
+  TLTC_RDR_K0:'RDR@V0',        TLTC_RDR_K1:'RDR@V1',        TLTC_RDR_K2:'RDR@V2',        TLTC_RDR_K3:'RDR@V3',        TLTC_RDR_K4:'RDR@V_MAX',
+  TLTC_SGRP_K0:'S 组@V0',      TLTC_SGRP_K1:'S 组@V1',       TLTC_SGRP_K2:'S 组@V2',      TLTC_SGRP_K3:'S 组@V3',       TLTC_SGRP_K4:'S 组@V_MAX',
+
+  // ─── GRD_ guard ───
+  GRD_TRIM_RATE:'Q_TRIM 推进率 (°/s)',
+  GRD_PIT_WARN: '俯仰告警阈值 (°)',
+  GRD_ROL_WARN: '横滚告警阈值 (°)',
+
+  // ─── PRE_ preflight ───
+  PRE_CH:     '预检 RC 通道 (1-16)',
+  PRE_PWM:    '预检电机怠速 PWM (μs)',
+  PRE_STOP:   '预检电机停转 PWM (μs)',
+  PRE_GRP_MS: '预检每子步时长 (ms)',
+  PRE_SWING:  'STAGE 1 tilt 摆动幅度 (相对中立, °)',
+  PRE_OVR_DFL: 'DFL 实时预览覆盖 abs° (−1=不覆盖)', PRE_OVR_DFR: 'DFR 预览覆盖',
+  PRE_OVR_TL1: 'TL1 预览覆盖',                       PRE_OVR_TR1: 'TR1 预览覆盖',
+  PRE_OVR_RDL: 'RDL 预览覆盖',                       PRE_OVR_RDR: 'RDR 预览覆盖',
+  PRE_OVR_SGRP:'S 组预览覆盖',
+};
+
+export function paramLabel(key: string): string | undefined {
+  return PARAM_LABELS[key];
 }

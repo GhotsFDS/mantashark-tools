@@ -25,33 +25,36 @@ export const MOTORS: MotorEntry[] = [
     position:{x: 0.15, y: 0.50}, tilt_servo_ch: 18 },
 ];
 
-// 用户视角: 所有 tilt 0 = 中立 (PWM=ZERO=1500). 机械绝对角由 ZERO 标定决定.
-// + 方向 = 趋向水平于地面, − 方向 = 趋向垂直于地面 (PWM 变化方向由 DIR 标定).
-// 软限位 LMIN/LMAX 各自独立调, 但 |LMIN| + |LMAX| ≤ 180° (180° 舵机总行程上限).
+// 角度约定: 绝对物理角度 abs_deg (0°=垂直水面 / 45°=中立 / 90°=水平水面).
+// 所有 motor 中立位都装到相对水面 45°. 上电后默认全部停在 45° (PWM=ZERO=1500).
+// 软限位 LMIN/LMAX 都是绝对角度 (0..180), 总跨度 LMAX-LMIN ≤ 180° (舵机机械行程).
 export const TILTS: TiltConfig[] = [
-  // S_GROUP 第一位: 主控装置 (DFL/DFR 都被 S 拖动, 看 S 状态最先)
-  { id:'S_GROUP_TILT', alias:'SGRP', range:[-90, 90], servo_ch:19, is_group:true  },
-  // DFL/DFR: 受 S→DF 软解耦补偿. 180° 舵机全行程
-  { id:'DFL',          alias:'DFL',  range:[-90, 90], servo_ch:13, is_group:false },
-  { id:'DFR',          alias:'DFR',  range:[-90, 90], servo_ch:14, is_group:false },
-  // T1 实验性
-  { id:'TL1',          alias:'TL1',  range:[-15, 15], servo_ch:15, is_group:false },
-  { id:'TR1',          alias:'TR1',  range:[-15, 15], servo_ch:16, is_group:false },
-  // RD 后斜下吹: 仅单向 (− 朝下吹)
-  { id:'RDL',          alias:'RDL',  range:[-30,  0], servo_ch:17, is_group:false },
-  { id:'RDR',          alias:'RDR',  range:[-30,  0], servo_ch:18, is_group:false },
+  // S_GROUP 主控 (DFL/DFR 都被 S 拖动, 看 S 状态最先). 全行程 0..90 (垂直 → 水平)
+  { id:'S_GROUP_TILT', alias:'SGRP', range:[ 0, 90], servo_ch:19, is_group:true  },
+  // DFL/DFR: 受 S→DF 软解耦补偿. 全行程 0..90
+  { id:'DFL',          alias:'DFL',  range:[ 0, 90], servo_ch:13, is_group:false },
+  { id:'DFR',          alias:'DFR',  range:[ 0, 90], servo_ch:14, is_group:false },
+  // T1 实验性: 中立 ±15°
+  { id:'TL1',          alias:'TL1',  range:[30, 60], servo_ch:15, is_group:false },
+  { id:'TR1',          alias:'TR1',  range:[30, 60], servo_ch:16, is_group:false },
+  // RD 后斜下吹: 单向 (15..45°, 中立 → 满下吹)
+  { id:'RDL',          alias:'RDL',  range:[15, 45], servo_ch:17, is_group:false },
+  { id:'RDR',          alias:'RDR',  range:[15, 45], servo_ch:18, is_group:false },
 ];
+
+export const TILT_NEUTRAL_ABS_DEG = 45.0;
 
 export const TILT_IDS: TiltId[] = TILTS.map(t => t.id);
 
 export const PHASES: PhaseName[] = ['STATIONARY', 'TAXI', 'CUSHION', 'GROUND_EFFECT', 'EMERGENCY'];
 
+// 阶段默认 tilt 角度 (abs_deg, 45° = 中立). 与 phases.lua PHASE_CONFIG 对齐.
 export const DEFAULT_PHASE_CONFIG: Record<PhaseName, PhaseConfig> = {
-  STATIONARY:    { trim: 0,  tilts: { DFL:0, DFR:0, TL1:0, TR1:0, RDL:0,  RDR:0,  S_GROUP_TILT:0  } },
-  TAXI:          { trim: 5,  tilts: { DFL:0, DFR:0, TL1:0, TR1:0, RDL:30, RDR:30, S_GROUP_TILT:45 } },
-  CUSHION:       { trim: 9,  tilts: { DFL:10,DFR:10,TL1:0, TR1:0, RDL:15, RDR:15, S_GROUP_TILT:15 } },
-  GROUND_EFFECT: { trim: 11, tilts: { DFL:5, DFR:5, TL1:0, TR1:0, RDL:0,  RDR:0,  S_GROUP_TILT:0  } },
-  EMERGENCY:     { trim: 0,  tilts: { DFL:0, DFR:0, TL1:0, TR1:0, RDL:0,  RDR:0,  S_GROUP_TILT:0  } },
+  STATIONARY:    { trim: 5,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 } },
+  TAXI:          { trim: 5,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:15, RDR:15, S_GROUP_TILT:90 } },
+  CUSHION:       { trim: 9,  tilts: { DFL:55, DFR:55, TL1:45, TR1:45, RDL:30, RDR:30, S_GROUP_TILT:60 } },
+  GROUND_EFFECT: { trim: 11, tilts: { DFL:50, DFR:50, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 } },
+  EMERGENCY:     { trim: 0,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 } },
 };
 
 export const GROUP_COLORS: Record<string, string> = {

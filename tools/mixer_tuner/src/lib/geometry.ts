@@ -1,5 +1,5 @@
 // 动态 geometry — Lua geometry.lua 的 TS 镜像. 公式必须保持一致.
-// tilt 角度 → 实际 pitch/roll/yaw 系数 (cos/sin 分解).
+// 输入: 绝对物理角度 abs_deg (0=垂直水面, 45=中立, 90=水平水面).
 
 import type { GroupKey } from './types';
 
@@ -16,29 +16,26 @@ export type MotorId =
   | 'RDL' | 'RDR';
 
 const DEG2RAD = Math.PI / 180.0;
+export const NEUTRAL_ABS_DEG = 45.0;
 
 /**
- * 动态 geometry: 根据 tilt 角度算 effective 轴贡献.
- * 与 scripts-plane/geometry.lua 同步.
+ * 动态 geometry: 根据绝对物理角度算 effective 轴贡献.
  *
- * @param motorId - 12 motor ID
- * @param tiltDeg - 当前 tilt 舵机角度 (机体系)
- *                  - DFL/DFR/TL1/TR1: 中立 0°, ±60° 对称
- *                  - SL/SR (S_GROUP 控制): 中立 45°, 0..90°
- *                  - RDL/RDR: 0..30° 单向
- *                  - 其他无 tilt motor: 此参数被忽略
- * @param base - { pitch, roll, yaw } base coefficients (motor 在 tilt 中立位的轴贡献)
+ * @param motorId  - 12 motor ID
+ * @param absDeg   - 绝对物理角度 (0=垂直水面, 45=中立, 90=水平水面)
+ * @param base     - { pitch, roll, yaw } base coefficients (motor 中立位 abs=45° 时的轴贡献)
  * @returns 修正后 effective coefficients
  */
-export function dynamicGeometry(motorId: MotorId, tiltDeg: number, base: AxisCoeffs): AxisCoeffs {
+export function dynamicGeometry(motorId: MotorId, absDeg: number, base: AxisCoeffs): AxisCoeffs {
   const p = base.pitch ?? 0;
   const r = base.roll ?? 0;
   const y = base.yaw ?? 0;
+  const offset = (absDeg ?? NEUTRAL_ABS_DEG) - NEUTRAL_ABS_DEG;
+  const rad = offset * DEG2RAD;
 
   // DFL/DFR: pitch ~ cos, yaw ~ sin × side
   if (motorId === 'DFL' || motorId === 'DFR') {
     const side = motorId === 'DFR' ? 1 : -1;
-    const rad = tiltDeg * DEG2RAD;
     return {
       pitch: p * Math.cos(rad),
       roll: r,
@@ -46,10 +43,9 @@ export function dynamicGeometry(motorId: MotorId, tiltDeg: number, base: AxisCoe
     };
   }
 
-  // SL/SR (S_GROUP 控制): tiltDeg 是用户偏移 (0 = 中立)
+  // SL/SR (S_GROUP 控制)
   if (motorId === 'SL1' || motorId === 'SL2' || motorId === 'SR1' || motorId === 'SR2') {
     const side = motorId.startsWith('SR') ? 1 : -1;
-    const rad = tiltDeg * DEG2RAD;
     return {
       pitch: p * Math.cos(rad),
       roll: r,
@@ -60,7 +56,6 @@ export function dynamicGeometry(motorId: MotorId, tiltDeg: number, base: AxisCoe
   // TL1/TR1: 主 yaw, tilt 改 pitch
   if (motorId === 'TL1' || motorId === 'TR1') {
     const side = motorId === 'TR1' ? 1 : -1;
-    const rad = tiltDeg * DEG2RAD;
     return {
       pitch: p + y * Math.sin(rad) * (-side),
       roll: r,
@@ -68,9 +63,9 @@ export function dynamicGeometry(motorId: MotorId, tiltDeg: number, base: AxisCoe
     };
   }
 
-  // RDL/RDR: 0..30° 兼容 v8 旧线性插值
+  // RDL/RDR: abs ∈ 15..45° (单向). abs=45 t=0 (中立), abs=15 t=1 (满下吹).
   if (motorId === 'RDL' || motorId === 'RDR') {
-    const t = Math.max(0, Math.min(1, tiltDeg / 30.0));
+    const t = Math.max(0, Math.min(1, (NEUTRAL_ABS_DEG - (absDeg ?? NEUTRAL_ABS_DEG)) / 30.0));
     return {
       pitch: -0.5 * t,
       roll: r,
@@ -83,8 +78,7 @@ export function dynamicGeometry(motorId: MotorId, tiltDeg: number, base: AxisCoe
 }
 
 /**
- * Helper: 给定 motor ID + 当前所有 tilt 角度, 返回 effective base.
- * 用于 motor 与 tilt servo 的关联查询.
+ * Helper: 给定 motor ID + 当前所有 tilt 角度 (abs_deg), 返回该 motor 看到的 abs_deg.
  */
 export function tiltForMotor(
   motorId: MotorId,
@@ -92,13 +86,13 @@ export function tiltForMotor(
 ): number {
   switch (motorId) {
     case 'SL1': case 'SL2': case 'SR1': case 'SR2':
-      return tilts.S_GROUP_TILT ?? 0;  // 用户视角 0 = 中立 (机械 45°)
-    case 'DFL': return tilts.DFL ?? 0;
-    case 'DFR': return tilts.DFR ?? 0;
-    case 'TL1': return tilts.TL1 ?? 0;
-    case 'TR1': return tilts.TR1 ?? 0;
-    case 'RDL': return tilts.RDL ?? 0;
-    case 'RDR': return tilts.RDR ?? 0;
-    default: return 0;  // SL2/SR2/TL2/TR2: 无 tilt
+      return tilts.S_GROUP_TILT ?? NEUTRAL_ABS_DEG;
+    case 'DFL': return tilts.DFL ?? NEUTRAL_ABS_DEG;
+    case 'DFR': return tilts.DFR ?? NEUTRAL_ABS_DEG;
+    case 'TL1': return tilts.TL1 ?? NEUTRAL_ABS_DEG;
+    case 'TR1': return tilts.TR1 ?? NEUTRAL_ABS_DEG;
+    case 'RDL': return tilts.RDL ?? NEUTRAL_ABS_DEG;
+    case 'RDR': return tilts.RDR ?? NEUTRAL_ABS_DEG;
+    default: return NEUTRAL_ABS_DEG;
   }
 }

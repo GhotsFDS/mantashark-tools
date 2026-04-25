@@ -26,6 +26,7 @@ export function Gcs() {
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    setConnected(gcs.isConnected());
     const off = gcs.on((m: GcsMessage) => {
       if (m.type === 'status') setConnected(m.connected);
       else if (m.type === 'heartbeat') setTlm(t => ({ ...t, heartbeat: { ...m, ts: Date.now() }, lastMsgMs: Date.now() }));
@@ -34,44 +35,47 @@ export function Gcs() {
       else if (m.type === 'gps')      setTlm(t => ({ ...t, gps: m, lastMsgMs: Date.now() }));
       else if (m.type === 'rc')       setTlm(t => ({ ...t, rc: m.channels, lastMsgMs: Date.now() }));
       else if (m.type === 'statustext') setLog(l => [...l.slice(-199), { sev: m.severity, text: m.text, ts: Date.now() }]);
-      else if (m.type === 'param') {
-        if (m.name in params) setParam(m.name, m.value);
-        setStats(s => ({ ...s, pullCount: s.pullCount + 1, pullTotal: m.count }));
-      }
+      // param 由 App-level listener 统一写 store, 这里只看到累计计数
+      else if (m.type === 'param') setStats(s => ({ ...s, pullCount: s.pullCount + 1, pullTotal: m.count }));
       else if (m.type === 'error') setLog(l => [...l.slice(-199), { sev: 2, text: '❌ ' + m.msg, ts: Date.now() }]);
     });
     return () => { off(); };
-  }, [params, setParam]);
+  }, []);
 
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [log]);
 
   const connect = () => { gcs.setUrl(url); gcs.connect(); };
   const disconnect = () => gcs.disconnect();
 
-  const pullAll = () => {
+  const pullAll = async () => {
+    if (syncMode !== 'none') return;
     setStats({ pullCount: 0, pullTotal: 0, pushCount: 0 });
     setSyncMode('pulling');
-    // 只拉我们关心的参数 (MSK_/TLT_/GRD_/PRE_/MGEO_/TLTC_), 比全量快得多
-    const keys = Object.keys(DEFAULT_PARAMS);
-    let i = 0;
-    const iv = setInterval(() => {
-      if (i >= keys.length) { clearInterval(iv); setSyncMode('none'); return; }
-      gcs.readParam(keys[i]);
-      i++;
-    }, 50); // 20 Hz, ~5s 全拉
+    const keys = Object.keys(DEFAULT_PARAMS).filter(k => !/^PRE_OVR_/.test(k));
+    const r = await gcs.pullParams(keys, (g, t) => setStats(s => ({ ...s, pullCount: g, pullTotal: t })));
+    setLog(l => [...l.slice(-199), {
+      sev: r.timedOut ? 4 : 6,
+      text: r.timedOut ? `⚠ 拉取超时 收 ${r.got}/${keys.length}, 缺 ${r.missing.length}` : `✓ 拉取 ${r.got} 个参数`,
+      ts: Date.now(),
+    }]);
+    setSyncMode('none');
   };
 
-  const pushAll = () => {
+  const pushAll = async () => {
+    if (syncMode !== 'none') return;
     setStats(s => ({ ...s, pushCount: 0 }));
     setSyncMode('pushing');
-    const keys = Object.keys(DEFAULT_PARAMS).filter(k => k in params);
-    let i = 0;
-    const iv = setInterval(() => {
-      if (i >= keys.length) { clearInterval(iv); setSyncMode('none'); return; }
-      gcs.setParam(keys[i], params[keys[i]]);
-      setStats(s => ({ ...s, pushCount: s.pushCount + 1 }));
-      i++;
-    }, 50);
+    const map: Record<string, number> = {};
+    for (const k of Object.keys(DEFAULT_PARAMS)) {
+      if (k in params && !/^PRE_OVR_/.test(k)) map[k] = params[k];
+    }
+    const r = await gcs.pushParams(map, (s, t) => setStats(st => ({ ...st, pushCount: s, pullTotal: t })));
+    setLog(l => [...l.slice(-199), {
+      sev: r.timedOut ? 4 : 6,
+      text: r.timedOut ? `⚠ 推送超时 ack ${r.acked}/${Object.keys(map).length}` : `✓ 已保存 ${r.acked} 个参数`,
+      ts: Date.now(),
+    }]);
+    setSyncMode('none');
   };
 
   const armed = tlm.heartbeat?.armed ?? false;

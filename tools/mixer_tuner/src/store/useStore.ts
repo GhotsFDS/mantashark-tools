@@ -39,11 +39,12 @@ const INITIAL: AppState = {
   selectedTiltCurve: 'SGRP',
   curveMode: 'k',
   currentTab: 'overview',
-  tiltPreview: { DFL:0, DFR:0, TL1:0, TR1:0, RDL:0, RDR:0, S_GROUP_TILT:0 },
-  analysisRdTilt: 0,
-  analysisSGroup: 0,
-  analysisDfTarget: 10,
-  analysisTilts: { DFL:0, DFR:0, TL1:0, TR1:0, RDL:0, RDR:0, S_GROUP_TILT:0 },
+  // 默认全 45° (绝对物理角度 = 中立)
+  tiltPreview: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 },
+  analysisRdTilt: 45,
+  analysisSGroup: 45,
+  analysisDfTarget: 55,                                  // 中立稍偏水平
+  analysisTilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 },
 };
 
 export const useStore = create<AppState & Actions>()(
