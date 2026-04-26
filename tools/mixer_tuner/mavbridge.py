@@ -192,10 +192,21 @@ class Bridge:
         # mavbridge 收 FC → forward 给所有 mp_outs; 也读 mp_outs 回包写回 FC.
         self.mp_outs = mp_outs or []
         self.mp_conns = []   # [mavutil.mavlink_connection, ...]
+        # SERVO_OUTPUT_RAW 24 路缓存 (按 port 字段分段):
+        # port=0 → 1-8, port=1 → 9-16, port=2 → 17-24 (倾转舵 RDL/RDR/SGRP 在这)
+        self.servo_buf = [0] * 24
+        # 电池缓存 — ArduPilot BATTERY_STATUS 偶尔发 current=-1 (该帧未读到), 保持上次有效值防跳变
+        self.last_battery_current = None
+        self.last_battery_voltage = 0
+        self.last_battery_remaining = -1
+        self.last_battery_consumed = 0
 
     def connect_mav(self):
         print(f'[bridge] 连 FC: {self.device} @ {self.baud}')
-        self.mav = mavutil.mavlink_connection(self.device, baud=self.baud)
+        # 必须用 MAVLink v2 dialect (ardupilotmega): SERVO_OUTPUT_RAW 后 8 路 (servo9..16_raw)
+        # 是 v2 extension 字段, v1 默认会丢. 不设 dialect 时 ArduPilot 4.7 默认 v2 但保险显式给.
+        os.environ.setdefault('MAVLINK20', '1')
+        self.mav = mavutil.mavlink_connection(self.device, baud=self.baud, dialect='ardupilotmega')
         print('[bridge] 等 HEARTBEAT...')
         m = self.mav.wait_heartbeat(timeout=8)
         if m is None:
@@ -258,14 +269,63 @@ class Bridge:
                         'index': m.param_index,
                         'count': m.param_count}
             elif t == 'STATUSTEXT':
-                txt = m.text
-                if hasattr(txt, 'decode'):
-                    txt = txt.decode('ascii', errors='replace')
-                txt = str(txt).rstrip('\x00')
+                # pymavlink MAVLink_statustext_message.__init__ 把 text 强制 ascii decode 替换非 ASCII,
+                # m.text 拿到时已经全是 '?'. 必须从 _text_raw (原始 bytes) 重新按 utf-8 解码.
+                raw = getattr(m, '_text_raw', None)
+                if raw is not None:
+                    txt = raw.split(b'\x00', 1)[0].decode('utf-8', errors='replace')
+                else:
+                    txt = str(m.text).rstrip('\x00')
                 data = {'type': 'statustext', 'severity': m.severity, 'text': txt}
             elif t == 'RC_CHANNELS':
-                chans = [getattr(m, f'chan{i}_raw', 0) for i in range(1, 9)]
+                chans = [getattr(m, f'chan{i}_raw', 0) for i in range(1, 13)]   # 12 路
                 data = {'type': 'rc', 'channels': chans}
+            elif t == 'SERVO_OUTPUT_RAW':
+                # ArduPilot 实际单帧发 16 路 (v2 extension: servo1..16_raw):
+                #   port=0 → SERVO 1-16, port=1 → SERVO 17-32 (Plane NUM_SERVO_CHANNELS=32)
+                # 必须用 MAVLink v2 dialect 才能拿到 servo9..16_raw 后 8 路.
+                # 见 ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp:3374 send_servo_output_raw().
+                port = getattr(m, 'port', 0)
+                base = port * 16
+                for i in range(16):
+                    if base + i < 24:   # 我们关心 SERVO 1-24 (M1-12 + 7 倾转 = 19 路实际用)
+                        v = getattr(m, f'servo{i+1}_raw', 0)
+                        # ArduPilot 把 65535 当无效 → 转 0
+                        self.servo_buf[base + i] = 0 if v == 65535 else v
+                data = {'type': 'servo', 'channels': list(self.servo_buf)}
+            elif t == 'BATTERY_STATUS':
+                # battery 1: m.id == 0 (0-indexed).
+                # ArduPilot 偶尔某帧 current_battery=-1 / cells 全 65535 (临时未读到),
+                # 用 last_battery_* 缓存保持上次有效值, 防 UI 在 "5.2A" 和 "—" 之间跳变.
+                if m.id == 0:
+                    cells = [c for c in m.voltages[:10] if c != 65535]
+                    if cells:
+                        self.last_battery_voltage = sum(cells) / 1000.0
+                    if m.current_battery >= 0:
+                        self.last_battery_current = m.current_battery / 100.0
+                    if m.battery_remaining >= 0:
+                        self.last_battery_remaining = int(m.battery_remaining)
+                    if m.current_consumed >= 0:
+                        self.last_battery_consumed = int(m.current_consumed)
+                    data = {'type': 'battery',
+                            'voltage': self.last_battery_voltage,
+                            'current': self.last_battery_current,
+                            'remaining': self.last_battery_remaining,
+                            'consumed_mah': self.last_battery_consumed}
+            elif t == 'SYS_STATUS':
+                # 老固件兜底, 单电池. 同样用缓存防跳变.
+                if m.voltage_battery > 0:
+                    self.last_battery_voltage = m.voltage_battery / 1000.0
+                if m.current_battery >= 0:
+                    self.last_battery_current = m.current_battery / 100.0
+                if m.battery_remaining >= 0:
+                    self.last_battery_remaining = int(m.battery_remaining)
+                data = {'type': 'battery',
+                        'voltage': self.last_battery_voltage,
+                        'current': self.last_battery_current,
+                        'remaining': self.last_battery_remaining,
+                        'consumed_mah': self.last_battery_consumed,
+                        'fallback': True}
             else:
                 continue
             if data is not None and self.loop is not None:

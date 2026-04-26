@@ -9,6 +9,8 @@ export type GcsMessage =
   | { type: 'param'; name: string; value: number; index: number; count: number }
   | { type: 'statustext'; severity: number; text: string }
   | { type: 'rc'; channels: number[] }
+  | { type: 'servo'; channels: number[] }
+  | { type: 'battery'; voltage: number; current: number | null; remaining: number; consumed_mah?: number; fallback?: boolean }
   | { type: 'pong'; ts: number }
   | { type: 'error'; msg: string };
 

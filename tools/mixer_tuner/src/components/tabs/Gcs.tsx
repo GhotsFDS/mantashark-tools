@@ -18,6 +18,8 @@ interface Telemetry {
   vfr?:       { airspeed: number; groundspeed: number; alt: number; climb: number; throttle: number };
   gps?:       { fix_type: number; sats: number; hdop: number | null };
   rc?:        number[];
+  servo?:     number[];
+  battery?:   { voltage: number; current: number | null; remaining: number; consumed_mah?: number };
   lastMsgMs?: number;
 }
 
@@ -42,6 +44,8 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
       else if (m.type === 'vfr_hud')  setTlm(t => ({ ...t, vfr: m, lastMsgMs: Date.now() }));
       else if (m.type === 'gps')      setTlm(t => ({ ...t, gps: m, lastMsgMs: Date.now() }));
       else if (m.type === 'rc')       setTlm(t => ({ ...t, rc: m.channels, lastMsgMs: Date.now() }));
+      else if (m.type === 'servo')    setTlm(t => ({ ...t, servo: m.channels, lastMsgMs: Date.now() }));
+      else if (m.type === 'battery')  setTlm(t => ({ ...t, battery: { voltage: m.voltage, current: m.current, remaining: m.remaining, consumed_mah: m.consumed_mah }, lastMsgMs: Date.now() }));
       else if (m.type === 'statustext') setLog(l => [...l.slice(-199), { sev: m.severity, text: m.text, ts: Date.now() }]);
       // param 由 App-level listener 统一写 store, 这里只看到累计计数
       else if (m.type === 'param') setStats(s => ({ ...s, pullCount: s.pullCount + 1, pullTotal: m.count }));
@@ -90,16 +94,38 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
   const sevColor = (s: number) => s <= 2 ? 'text-err' : s <= 4 ? 'text-warn' : s <= 6 ? 'text-fg' : 'text-fg-dim';
   const healthy = connected && tlm.lastMsgMs && (Date.now() - tlm.lastMsgMs < 3000);
 
-  // ─── 实时 K (FC 真实地速 → PCHIP) ───
+  // ─── 实时 K (复刻 Lua main.lua 的 spd_eff 算法) ───
+  // NOGPS: spd_eff = [0, V1, V2][gear-1]  (强制断点 → K{gear-1})
+  // GPS:   spd_eff = min(GPS地速, V_gear)
+  const liveRcCh = (tlm as any).rc as number[] | undefined;
+  const gearChIdx = Math.max(1, Math.floor(params.MSK_GEAR_CH ?? 7)) - 1;
+  const modeChIdx = Math.max(1, Math.floor(params.MSK_MODE_CH ?? 6)) - 1;
+  const liveGearLocal = liveRcCh ? (() => {
+    const pwm = liveRcCh[gearChIdx] ?? 1500;
+    return pwm < 1300 ? 1 : pwm < 1700 ? 2 : 3;
+  })() : 1;
+  const liveModeGps = liveRcCh ? (liveRcCh[modeChIdx] ?? 1500) > 1500 : true;
   const liveSpd = healthy ? (tlm.vfr?.groundspeed ?? 0) : null;
+  const liveSpdEff = useMemo(() => {
+    if (liveSpd == null) return 0;
+    if (!liveModeGps) {
+      const breakpoints = [0, params.MSK_V1 ?? 4, params.MSK_V2 ?? 8];
+      return breakpoints[liveGearLocal - 1] ?? 0;
+    }
+    const limit = liveGearLocal === 1 ? (params.MSK_V1 ?? 4)
+                : liveGearLocal === 2 ? (params.MSK_V2 ?? 8)
+                : (params.MSK_V_MAX ?? 20);
+    return Math.min(liveSpd, limit);
+  }, [liveSpd, liveModeGps, liveGearLocal, params.MSK_V1, params.MSK_V2, params.MSK_V_MAX]);
+
   const liveK: Record<GroupKey, number> = useMemo(() => {
     if (liveSpd == null) return currentK ?? { KS:0, KDF:0, KT:0, KRD:0 };
     const k: Record<GroupKey, number> = { KS:0, KDF:0, KT:0, KRD:0 };
     for (const g of ['KS','KDF','KT','KRD'] as GroupKey[]) {
-      k[g] = Math.max(0, Math.min(1, evalCurve(g, liveSpd, params)));
+      k[g] = Math.max(0, Math.min(1, evalCurve(g, liveSpdEff, params)));
     }
     return k;
-  }, [liveSpd, params, currentK]);
+  }, [liveSpd, liveSpdEff, params, currentK]);
   const liveTotalThrust = MOTORS.reduce((s, m) => s + (liveK[m.group] ?? 0) * SINGLE_MOTOR_MAX_N, 0);
   const liveTW = liveTotalThrust / VEHICLE_WEIGHT_N;
 
@@ -169,8 +195,8 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
         </div>
       </div>
 
-      {/* ═══ 行 2: 实时 K + 力平衡 + RC (横排, 互填留空) ═══ */}
-      <div className="card col-span-5 py-2">
+      {/* ═══ 行 2: 实时 K + 力平衡 + 电池 ═══ */}
+      <div className="card col-span-4 py-2">
         <div className="flex items-center gap-2 mb-1.5">
           <TrendingUp size={12} className="text-accent"/>
           <span className="card-title mb-0 text-[11px]">实时 K 值</span>
@@ -216,18 +242,136 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
         </div>
       </div>
 
-      <div className="card col-span-4 py-2">
+      {/* 电池 (battery 1) */}
+      <div className="card col-span-5 py-2">
         <div className="card-title text-[11px] mb-1.5 flex items-center gap-1.5">
-          <span>RC 通道</span>
-          {!tlm.rc && <span className="text-[9px] text-fg-dim font-normal">(未连或无 RC 数据)</span>}
+          <span>电池 1</span>
+          {!tlm.battery && <span className="text-[9px] text-fg-dim font-normal">(无数据)</span>}
         </div>
-        <div className="grid grid-cols-5 gap-0.5">
-          {(tlm.rc ?? Array(10).fill(0)).slice(0, 10).map((v, i) => (
-            <div key={i} className={'text-center bg-panel-2 rounded py-0.5 ' + (!tlm.rc ? 'opacity-30' : '')}>
-              <div className="text-[8px] text-fg-dim leading-tight">CH{i+1}</div>
-              <div className="val-mono text-[10px]">{tlm.rc ? v : '—'}</div>
+        {tlm.battery ? (() => {
+          const b = tlm.battery;
+          const v = b.voltage;
+          const cells6 = v / 6;  // 6S 默认
+          const cellOk = cells6 >= 3.7;
+          const cellWarn = cells6 >= 3.5 && cells6 < 3.7;
+          const power = b.current ? (v * b.current) : null;
+          return (
+            <div className="grid grid-cols-4 gap-1.5 text-center">
+              <div className="bg-panel-2 rounded py-1">
+                <div className="text-[8px] text-fg-mute">电压</div>
+                <div className={'val-mono text-[13px] ' + (cellOk ? 'text-ok' : cellWarn ? 'text-warn' : 'text-err')}>
+                  {v.toFixed(1)}<span className="text-fg-dim text-[8px] ml-0.5">V</span>
+                </div>
+                <div className="text-[8px] text-fg-dim">{cells6.toFixed(2)} V/cell · 6S</div>
+              </div>
+              <div className="bg-panel-2 rounded py-1">
+                <div className="text-[8px] text-fg-mute">电流</div>
+                <div className="val-mono text-[13px]">
+                  {b.current !== null ? b.current.toFixed(1) : '—'}<span className="text-fg-dim text-[8px] ml-0.5">A</span>
+                </div>
+                {power !== null && <div className="text-[8px] text-fg-dim">{power.toFixed(0)} W</div>}
+              </div>
+              <div className="bg-panel-2 rounded py-1">
+                <div className="text-[8px] text-fg-mute">已用</div>
+                <div className="val-mono text-[13px]">{b.consumed_mah ?? 0}<span className="text-fg-dim text-[8px] ml-0.5">mAh</span></div>
+              </div>
+              <div className="bg-panel-2 rounded py-1">
+                <div className="text-[8px] text-fg-mute">剩余</div>
+                <div className={'val-mono text-[13px] ' + (b.remaining < 0 ? 'text-fg-dim' : b.remaining < 20 ? 'text-err' : b.remaining < 40 ? 'text-warn' : 'text-ok')}>
+                  {b.remaining < 0 ? '—' : b.remaining + '%'}
+                </div>
+                {b.remaining >= 0 && (
+                  <div className="h-1 mt-0.5 mx-1 bg-bg-100 rounded overflow-hidden">
+                    <div className={'h-full transition-all ' + (b.remaining < 20 ? 'bg-err' : b.remaining < 40 ? 'bg-warn' : 'bg-ok')}
+                         style={{ width: b.remaining + '%' }} />
+                  </div>
+                )}
+              </div>
             </div>
-          ))}
+          );
+        })() : (
+          <div className="text-[10px] text-fg-dim text-center py-3">未连或无电池遥测</div>
+        )}
+      </div>
+
+      {/* ═══ 行 3: RC 通道 (与 SERVO 同列布局对称) ═══ */}
+      <div className="card col-span-6 py-2">
+        <div className="card-title text-[11px] mb-1.5 flex items-center gap-1.5">
+          <span>RC 通道 (1-12)</span>
+          {!tlm.rc && <span className="text-[9px] text-fg-dim font-normal">(无 RC)</span>}
+        </div>
+        <div className="grid grid-cols-3 gap-x-3 gap-y-1">
+          {Array.from({ length: 12 }, (_, i) => {
+            const v = tlm.rc?.[i] ?? 0;
+            // RC 范围 800-2200 (兼容飞控扩展), 映射 0-100%
+            const pct = v > 0 ? Math.max(0, Math.min(100, (v - 800) / 14)) : 0;
+            // 标注用途, 跟 MSK_*_CH 参数对齐
+            const role = i === 5 ? 'Mode'   // ch6
+                       : i === 6 ? '档位'   // ch7
+                       : i === 7 ? '预检'   // ch8
+                       : i === 8 ? 'Auto'   // ch9
+                       : i === 11 ? 'RTL'   // ch12
+                       : '';
+            const label = role ? `CH${i+1} ${role}` : `CH${i+1}`;
+            return (
+              <div key={i} className="flex items-center gap-1.5">
+                <span className="text-[9px] text-fg-dim w-14 shrink-0 truncate">{label}</span>
+                <div className="h-1.5 bg-panel-2 rounded overflow-hidden flex-1 min-w-0">
+                  <div className="h-full bg-accent" style={{ width: pct + '%' }} />
+                </div>
+                <span className="val-mono text-[9px] w-9 text-right">{v || '—'}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* SERVO 输出 (按功能名显示) */}
+      <div className="card col-span-6 py-2">
+        <div className="card-title text-[11px] mb-1.5 flex items-center gap-1.5">
+          <span>SERVO 输出 (按功能)</span>
+          <span className="text-[9px] text-fg-dim font-normal">12 EDF + 7 倾转舵</span>
+          {!tlm.servo && <span className="text-[9px] text-fg-dim font-normal">(无)</span>}
+        </div>
+        <div className="grid grid-cols-3 gap-x-3 gap-y-1">
+          {([
+            // [SERVO 物理通道 idx (0-based), 功能名, 'M'|'T']
+            [0,  'SL1',     'M'],
+            [1,  'SL2',     'M'],
+            [2,  'SR1',     'M'],
+            [3,  'SR2',     'M'],
+            [4,  'DFL',     'M'],
+            [5,  'DFR',     'M'],
+            [6,  'TL1',     'M'],
+            [7,  'TL2',     'M'],
+            [8,  'TR1',     'M'],
+            [9,  'TR2',     'M'],
+            [10, 'RDL',     'M'],
+            [11, 'RDR',     'M'],
+            [12, 'DFL 倾',  'T'],
+            [13, 'DFR 倾',  'T'],
+            [14, 'TL1 倾',  'T'],
+            [15, 'TR1 倾',  'T'],
+            [16, 'RDL 倾',  'T'],
+            [17, 'RDR 倾',  'T'],
+            [18, 'S 组 倾', 'T'],
+          ] as const).map(([idx, name, group]) => {
+            const v = tlm.servo?.[idx] ?? 0;
+            // 电机 (M) 800-2200, 倾转舵 (T) 500-2500
+            const pct = v <= 0 ? 0 : group === 'M'
+              ? Math.max(0, Math.min(100, (v - 800) / 14))
+              : Math.max(0, Math.min(100, (v - 500) / 20));
+            const color = group === 'M' ? 'bg-accent' : 'bg-ks';
+            return (
+              <div key={idx} className="flex items-center gap-1.5">
+                <span className="text-[9px] text-fg-dim w-14 shrink-0 truncate">{name}</span>
+                <div className="h-1.5 bg-panel-2 rounded overflow-hidden flex-1 min-w-0">
+                  <div className={'h-full ' + color} style={{ width: pct + '%' }} />
+                </div>
+                <span className="val-mono text-[9px] w-9 text-right">{v || '—'}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
 

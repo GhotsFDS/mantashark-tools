@@ -187,9 +187,9 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
       </div>
 
       {/* 右侧: 实时数值 + 力平衡 */}
-      <div className="col-span-4 space-y-3">
-        {/* 当前组实时值 */}
-        <div className="card">
+      <div className="col-span-4 flex flex-col gap-3">
+        {/* 当前组实时值 (flex-1 撑满剩余高度对齐左侧曲线) */}
+        <div className="card flex-1 flex flex-col">
           <div className="card-title text-[11px]">@ {effectiveSpeed.toFixed(1)} m/s 实时</div>
           <div className="space-y-1.5">
             {(['KS','KDF','KT','KRD'] as GroupKey[]).map(g => (

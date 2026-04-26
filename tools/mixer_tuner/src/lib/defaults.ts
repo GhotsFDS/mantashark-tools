@@ -5,14 +5,25 @@ export const DEFAULT_PARAMS: ParamSet = {
   // ═══ MSK_ (mixer, key=81) ═══
   MSK_V1: 4.0,  MSK_V2: 8.0,  MSK_V3: 14.0,  MSK_V_MAX: 20.0,
   MSK_GEAR_CH: 7,                                 // v7 三档开关 RC 通道
-  // LOG164 实测有效值 (V1=4 V2=8 V3=14 V_MAX=20). 5 控制点 PCHIP 插值.
-  MSK_KS0:  0.70, MSK_KS1:  0.70, MSK_KS2:  0.55, MSK_KS3:  0.10, MSK_KS4:  0.10,
-  MSK_KDF0: 0.80, MSK_KDF1: 0.80, MSK_KDF2: 0.65, MSK_KDF3: 0.08, MSK_KDF4: 0.08,
-  MSK_KT0:  0.40, MSK_KT1:  0.40, MSK_KT2:  0.85, MSK_KT3:  0.65, MSK_KT4:  0.65,
-  MSK_KRD0: 0.65, MSK_KRD1: 0.70, MSK_KRD2: 0.85, MSK_KRD3: 0.25, MSK_KRD4: 0.25,
+  MSK_AUTO_CH: 9,                                 // Auto/Manual RC 通道 (>1500=Auto)
+  MSK_MODE_CH: 6,                                 // NOGPS/GPS RC 通道 (>1500=GPS)
+  // 动态 Q_TRIM_PITCH 目标 (deg) — gear 切换时 guard 平滑过渡到对应值
+  MSK_TRIM_G1: 5.0,                               // gear=1 慢速
+  MSK_TRIM_G2: 8.0,                               // gear=2 驼峰
+  MSK_TRIM_G3: 11.0,                              // gear=3 巡航 (LOG158 优化值)
+  // RTL 返航模式 (RC12)
+  MSK_RTL_CH:  12,                                // RTL RC 通道 (>1500 触发)
+  MSK_RTL_LVL: 0.30,                              // RTL 时 KS+KT 油门系数
+  // LOG164 优化版 (V_max=11.32, 巡航 V=10.04 pitch+17°, 实测无慢速段, 起步加速快).
+  // 调整: V0/V1 加大快冲驼峰, V_MAX 段回落主动减速保稳定 (防过驼峰后失控).
+  MSK_KS0:  0.70, MSK_KS1:  0.75, MSK_KS2:  0.55, MSK_KS3:  0.10, MSK_KS4:  0.05,  // V_MAX 减以保稳
+  MSK_KDF0: 0.80, MSK_KDF1: 0.90, MSK_KDF2: 0.65, MSK_KDF3: 0.08, MSK_KDF4: 0.05,
+  MSK_KT0:  0.50, MSK_KT1:  0.55, MSK_KT2:  0.85, MSK_KT3:  0.65, MSK_KT4:  0.50,  // KT0/1 抬高快加速, KT_MAX 回落
+  MSK_KRD0: 0.65, MSK_KRD1: 0.70, MSK_KRD2: 0.85, MSK_KRD3: 0.25, MSK_KRD4: 0.20,
 
   // ═══ TLT_ (tilt_driver, key=82) ═══
   TLT_CPL_SDF_K:   0.30,
+  TLT_CPL_EN:      1,                              // 0=关 不补偿, 1=开 反向补偿默认
   TLT_PWM_PER_DEG: 11.11,   // 90° 舵机 @ 1000-2000μs 标准值
   TLT_T1_DEG:      15.0,
   // LMIN/LMAX 是 *偏移量* offset = abs - 45 (中立 0). 范围 -180..+180, |LMIN|+|LMAX|≤180.
@@ -40,17 +51,20 @@ export const DEFAULT_PARAMS: ParamSet = {
 
   // ═══ TLTC_ (tilt curve, 7 路 × 5 控制点 K, V 共用 MSK_V*) = 35 ═══
   // 绝对物理角度 (0=垂直水面, 45=中立, 90=水平水面).
-  // 5 控制点 V0=0, V1, V2, V3, V_MAX. 默认基于 LOG164+v7 三档经验:
-  //   V0~V1 慢速: 全中立 (45)
-  //   V1~V2 驼峰: S 上抬 (75) + RD 下吹 (20) 抬尾建气垫
-  //   V2~V3+ 巡航: 渐回中立, DF 微抬头
-  TLTC_DFL_K0:  45, TLTC_DFL_K1:  45, TLTC_DFL_K2:  55, TLTC_DFL_K3:  50, TLTC_DFL_K4:  45,
-  TLTC_DFR_K0:  45, TLTC_DFR_K1:  45, TLTC_DFR_K2:  55, TLTC_DFR_K3:  50, TLTC_DFR_K4:  45,
+  // 默认基于 LOG164 飞过的 TILT_V1/V2/V3 = 0°/15°/30° (v7 偏移度) → abs = 45°/60°/75°.
+  // V0=0 V1=4 V2=8 V3=14 V_MAX=20.
+  //   水面静止 (V0): 全中立 abs=45 (gear=1 NOGPS 用)
+  //   驼峰 (V1):     DF 偏抬头 60° (gear=2 NOGPS), RD 满下吹抬尾 (15°), S 强力抬头 90°
+  //   过驼峰 (V2):   DF 75° 半水平推, RD 渐回 30°, S 60°
+  //   巡航 (V3):     DF 75° 全水平推 (LOG164 巡航 11 m/s pitch+17°), S 中立 45°
+  //   V_MAX:         保持巡航值 (盘旋 / 速度上限)
+  TLTC_DFL_K0:  45, TLTC_DFL_K1:  60, TLTC_DFL_K2:  75, TLTC_DFL_K3:  75, TLTC_DFL_K4:  75,
+  TLTC_DFR_K0:  45, TLTC_DFR_K1:  60, TLTC_DFR_K2:  75, TLTC_DFR_K3:  75, TLTC_DFR_K4:  75,
   TLTC_TL1_K0:  45, TLTC_TL1_K1:  45, TLTC_TL1_K2:  45, TLTC_TL1_K3:  45, TLTC_TL1_K4:  45,
   TLTC_TR1_K0:  45, TLTC_TR1_K1:  45, TLTC_TR1_K2:  45, TLTC_TR1_K3:  45, TLTC_TR1_K4:  45,
-  TLTC_RDL_K0:  45, TLTC_RDL_K1:  20, TLTC_RDL_K2:  30, TLTC_RDL_K3:  45, TLTC_RDL_K4:  45,
-  TLTC_RDR_K0:  45, TLTC_RDR_K1:  20, TLTC_RDR_K2:  30, TLTC_RDR_K3:  45, TLTC_RDR_K4:  45,
-  TLTC_SGRP_K0: 45, TLTC_SGRP_K1: 75, TLTC_SGRP_K2: 60, TLTC_SGRP_K3: 45, TLTC_SGRP_K4: 45,
+  TLTC_RDL_K0:  45, TLTC_RDL_K1:  15, TLTC_RDL_K2:  30, TLTC_RDL_K3:  45, TLTC_RDL_K4:  45,
+  TLTC_RDR_K0:  45, TLTC_RDR_K1:  15, TLTC_RDR_K2:  30, TLTC_RDR_K3:  45, TLTC_RDR_K4:  45,
+  TLTC_SGRP_K0: 45, TLTC_SGRP_K1: 90, TLTC_SGRP_K2: 60, TLTC_SGRP_K3: 45, TLTC_SGRP_K4: 45,
 
   // ═══ 布局位置 (用户可拖拽保存, 覆盖 actuators.ts 默认) ═══
   // 约定 (Y 取反后匹配用户偏好): -Y 前 (wide wings 在下), +Y 后 (chassis 在上)
@@ -65,6 +79,8 @@ export const DEFAULT_PARAMS: ParamSet = {
   GRD_TRIM_RATE: 0.5,
   GRD_PIT_WARN:  20.0,
   GRD_ROL_WARN:  25.0,
+  GRD_DEAD_DEG:  8.0,           // ATC 软干预死区: |pitch-target| ≤ 8° 不干预
+  GRD_FULL_DEG: 25.0,           // ATC 满干预阈值: |pitch-target| ≥ 25° 完全接入
 
   // ═══ PRE_ (preflight, key=85) ═══
   PRE_CH:     8,
@@ -102,6 +118,8 @@ export const PARAM_RANGES: Record<string, { min?: number; max?: number; step?: n
   MSK_V3: { min: 0.1, max: 30, step: 0.1 },
   MSK_V_MAX: { min: 1, max: 50, step: 0.5 },
   TLT_CPL_SDF_K: { min: 0, max: 1, step: 0.05 },
+  TLT_CPL_EN:    { min: 0, max: 1, step: 1 },
+  MSK_RTL_LVL:   { min: 0, max: 1, step: 0.05 },
   TLT_PWM_PER_DEG: { min: 1, max: 30, step: 0.01 },
   PRE_PWM: { min: 900, max: 1500, step: 10 },
   PRE_STOP: { min: 800, max: 1200, step: 10 },
@@ -132,6 +150,13 @@ export const PARAM_LABELS: Record<string, string> = {
   MSK_V3:    '速度断点 V3 (m/s) — 巡航高速',
   MSK_V_MAX: '最大速度 (m/s) — 曲线末端',
   MSK_GEAR_CH:'三档开关 RC 通道 (PWM<1300=档1, <1700=档2, ≥1700=档3)',
+  MSK_AUTO_CH:'Auto/Manual RC 通道 (PWM>1500=Auto 摇杆放大, ≤1500=Manual 线性)',
+  MSK_MODE_CH:'NOGPS/GPS RC 通道 (PWM>1500=GPS 真速插曲线, ≤1500=NOGPS 按 gear 取 K{gear-1} 固定档)',
+  MSK_TRIM_G1:'档1 慢速时 Q_TRIM_PITCH 目标 (°), guard 平滑过渡 0.5°/s',
+  MSK_TRIM_G2:'档2 驼峰时 Q_TRIM_PITCH 目标 (°)',
+  MSK_TRIM_G3:'档3 巡航时 Q_TRIM_PITCH 目标 (°), LOG158 优化 11°',
+  MSK_RTL_CH: 'RTL 返航 RC 通道 (>1500 触发, 仅 KS+KT 低油门, 优先级最高)',
+  MSK_RTL_LVL:'RTL 时 KS+KT 油门系数 (0..1, 默认 0.30 缓慢前进)',
   // KS/KDF/KT/KRD 五点
   MSK_KS0: 'S 斜吹 V0 油门系数',  MSK_KS1: 'S 斜吹 V1 油门系数',  MSK_KS2: 'S 斜吹 V2',  MSK_KS3: 'S 斜吹 V3',  MSK_KS4: 'S 斜吹 V_MAX',
   MSK_KDF0:'DF 前下吹 V0',         MSK_KDF1:'DF 前下吹 V1',         MSK_KDF2:'DF 前下吹 V2',MSK_KDF3:'DF 前下吹 V3',MSK_KDF4:'DF 前下吹 V_MAX',
@@ -140,6 +165,7 @@ export const PARAM_LABELS: Record<string, string> = {
 
   // ─── TLT_ 倾转舵标定 (PWM 量) ───
   TLT_CPL_SDF_K:    'S→DF 软解耦补偿系数 (0..1)',
+  TLT_CPL_EN:       'S→DF 软解耦总开关 (0=关 不补偿允许 S 拖 DF, 1=开 反向补偿默认)',
   TLT_PWM_PER_DEG:  '舵机角度→PWM 斜率 (μs/°), 90° 舵 ≈11.11',
   TLT_DFL_ZERO: 'DFL 中立 PWM (abs=45° 时输出)',  TLT_DFL_DIR: 'DFL 方向 (+1 或 −1, abs↑ 时 PWM↑↓)',
   TLT_DFR_ZERO: 'DFR 中立 PWM',                   TLT_DFR_DIR: 'DFR 方向',
@@ -183,6 +209,8 @@ export const PARAM_LABELS: Record<string, string> = {
   GRD_TRIM_RATE:'Q_TRIM 推进率 (°/s)',
   GRD_PIT_WARN: '俯仰告警阈值 (°)',
   GRD_ROL_WARN: '横滚告警阈值 (°)',
+  GRD_DEAD_DEG: 'ATC 软干预死区 (°), |pitch-target| 内不强制干预',
+  GRD_FULL_DEG: 'ATC 满干预阈值 (°), 偏离超过则完全接入 ATC',
 
   // ─── PRE_ preflight ───
   PRE_CH:     '预检 RC 通道 (1-16)',
