@@ -74,7 +74,9 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
   // 当前 mode 涉及的参数 keys
   const curveKeys = useMemo(() => {
     if (isK) {
-      const ks: string[] = ['MSK_V1','MSK_V2','MSK_V3','MSK_V_MAX'];
+      const ks: string[] = ['MSK_V1','MSK_V2','MSK_V3','MSK_V_MAX',
+                            'MSK_TRIM_G1','MSK_TRIM_G2','MSK_TRIM_G3',
+                            'MSK_TRIM0','MSK_TRIM1','MSK_TRIM2','MSK_TRIM3','MSK_TRIM4'];
       for (const g of ['KS','KDF','KT','KRD']) {
         for (let i=0; i<5; i++) ks.push(`MSK_${g}${i}`);
       }
@@ -132,6 +134,40 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
             ))}
           </div>
           <span className="text-[10px] text-fg-dim">评估 {effectiveSpeed.toFixed(1)}</span>
+
+          {/* ── 目标俯仰 (Q_TRIM_PITCH) ── NOGPS=档位离散, GPS=5点曲线 ── */}
+          <div className="flex items-center gap-1 text-[10px] border-l border-line pl-2 ml-1"
+               title="NOGPS: 档位 G1/G2/G3 离散; GPS: 5 点 PCHIP 速度曲线 T0..T4. guard 限速 0.5°/s 平滑">
+            <span className="text-fg-mute">目标°</span>
+            <span className="text-fg-dim">NOGPS</span>
+            {([1,2,3] as const).map(g => {
+              const key = `MSK_TRIM_G${g}` as const;
+              return (
+                <label key={g} className="flex items-center gap-0.5">
+                  <span className="text-fg-dim">G{g}</span>
+                  <input type="number" step={0.5} min={-15} max={20}
+                         value={params[key] ?? (g===1?5:g===2?8:11)}
+                         onChange={e => setParam(key, parseFloat(e.target.value) || 0)}
+                         className={'input val-mono text-right text-[10px] w-11 ' + (currentGear === g ? 'border-accent' : '')} />
+                </label>
+              );
+            })}
+            <span className="text-fg-dim ml-1">GPS曲线</span>
+            {([0,1,2,3,4] as const).map(i => {
+              const key = `MSK_TRIM${i}` as const;
+              const vlabels = ['V0','V1','V2','V3','Vmax'];
+              const dflt = [4,5,8,10,11][i];
+              return (
+                <label key={i} className="flex items-center gap-0.5" title={`${vlabels[i]} 处目标俯仰°`}>
+                  <span className="text-fg-dim">{vlabels[i]}</span>
+                  <input type="number" step={0.5} min={-15} max={20}
+                         value={params[key] ?? dflt}
+                         onChange={e => setParam(key, parseFloat(e.target.value) || 0)}
+                         className="input val-mono text-right text-[10px] w-11" />
+                </label>
+              );
+            })}
+          </div>
 
           <label className="flex items-center gap-1 text-[10px] cursor-pointer">
             <input type="checkbox" checked={mergeLR}

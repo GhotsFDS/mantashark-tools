@@ -8,9 +8,16 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_AUTO_CH: 9,                                 // Auto/Manual RC 通道 (>1500=Auto)
   MSK_MODE_CH: 6,                                 // NOGPS/GPS RC 通道 (>1500=GPS)
   // 动态 Q_TRIM_PITCH 目标 (deg) — gear 切换时 guard 平滑过渡到对应值
+  // NOGPS 模式: 按档位 G1/G2/G3 离散值
   MSK_TRIM_G1: 5.0,                               // gear=1 慢速
   MSK_TRIM_G2: 8.0,                               // gear=2 驼峰
   MSK_TRIM_G3: 11.0,                              // gear=3 巡航 (LOG158 优化值)
+  // GPS 模式: 5 点 PCHIP 速度曲线 (V0/V1/V2/V3/V_MAX 共用 K 曲线断点)
+  MSK_TRIM0: 4.0,                                 // V0 静止 (geffect)
+  MSK_TRIM1: 5.0,                                 // V1 慢速
+  MSK_TRIM2: 8.0,                                 // V2 驼峰
+  MSK_TRIM3: 10.0,                                // V3 巡航低
+  MSK_TRIM4: 11.0,                                // V_MAX 巡航高
   // RTL 返航模式 (RC12)
   MSK_RTL_CH:  12,                                // RTL RC 通道 (>1500 触发)
   MSK_RTL_LVL: 0.30,                              // RTL 时 KS+KT 油门系数
@@ -152,9 +159,14 @@ export const PARAM_LABELS: Record<string, string> = {
   MSK_GEAR_CH:'三档开关 RC 通道 (PWM<1300=档1, <1700=档2, ≥1700=档3)',
   MSK_AUTO_CH:'Auto/Manual RC 通道 (PWM>1500=Auto 摇杆放大, ≤1500=Manual 线性)',
   MSK_MODE_CH:'NOGPS/GPS RC 通道 (PWM>1500=GPS 真速插曲线, ≤1500=NOGPS 按 gear 取 K{gear-1} 固定档)',
-  MSK_TRIM_G1:'档1 慢速时 Q_TRIM_PITCH 目标 (°), guard 平滑过渡 0.5°/s',
-  MSK_TRIM_G2:'档2 驼峰时 Q_TRIM_PITCH 目标 (°)',
-  MSK_TRIM_G3:'档3 巡航时 Q_TRIM_PITCH 目标 (°), LOG158 优化 11°',
+  MSK_TRIM_G1:'NOGPS 档1 慢速 Q_TRIM_PITCH (°), guard 0.5°/s 平滑',
+  MSK_TRIM_G2:'NOGPS 档2 驼峰 Q_TRIM_PITCH (°)',
+  MSK_TRIM_G3:'NOGPS 档3 巡航 Q_TRIM_PITCH (°), LOG158 优化 11°',
+  MSK_TRIM0:  'GPS 速度曲线 T0 V0 静止时目标俯仰 (°)',
+  MSK_TRIM1:  'GPS 速度曲线 T1 V1 慢速时目标俯仰 (°)',
+  MSK_TRIM2:  'GPS 速度曲线 T2 V2 驼峰时目标俯仰 (°)',
+  MSK_TRIM3:  'GPS 速度曲线 T3 V3 巡航低速 (°)',
+  MSK_TRIM4:  'GPS 速度曲线 T4 V_MAX 巡航高速 (°)',
   MSK_RTL_CH: 'RTL 返航 RC 通道 (>1500 触发, 仅 KS+KT 低油门, 优先级最高)',
   MSK_RTL_LVL:'RTL 时 KS+KT 油门系数 (0..1, 默认 0.30 缓慢前进)',
   // KS/KDF/KT/KRD 五点
