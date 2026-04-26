@@ -41,6 +41,12 @@ export function TiltPanel({ t }: Props) {
   const ovrActive = (params[ovrKey] ?? -1) >= 0;
   const armedLock = simulateArmed;
 
+  // 标定参数实时推送: 拖 ZERO/DIR/LMIN/LMAX 时立刻飞控生效, 用户能看到 servo 实时调
+  const pushParam = (key: string, val: number) => {
+    setParam(key, val);
+    if (gcs.isConnected()) gcs.setParam(key, val);
+  };
+
   // 拖滑杆 → store + 实时推送 PRE_OVR_<alias>
   const setPreviewLive = (absDeg: number) => {
     setTiltPreview(t.id, absDeg);
@@ -77,7 +83,7 @@ export function TiltPanel({ t }: Props) {
       v = -(180 - Math.abs(lmaxOff));
       setFlashMin(true); setTimeout(() => setFlashMin(false), 300);
     }
-    setParam(lminKey, v);
+    pushParam(lminKey, v);
   };
   const handleLmaxChange = (raw: number) => {
     let v = Math.max(0, Math.min(180, raw));
@@ -85,7 +91,7 @@ export function TiltPanel({ t }: Props) {
       v = 180 - Math.abs(lminOff);
       setFlashMax(true); setTimeout(() => setFlashMax(false), 300);
     }
-    setParam(lmaxKey, v);
+    pushParam(lmaxKey, v);
   };
 
   return (
@@ -103,14 +109,14 @@ export function TiltPanel({ t }: Props) {
           <div className="label mb-1">中立 PWM (abs=45° 时输出)</div>
           <input type="range" min={500} max={2500} step={1}
                  value={zero}
-                 onChange={e => setParam(zeroKey, parseInt(e.target.value))}
+                 onChange={e => pushParam(zeroKey, parseInt(e.target.value))}
                  className="slider w-full" />
         </div>
         <div>
           <div className="label mb-1">μs</div>
           <input type="number" min={500} max={2500} step={1}
                  value={zero}
-                 onChange={e => setParam(zeroKey, parseFloat(e.target.value) || 1500)}
+                 onChange={e => pushParam(zeroKey, parseFloat(e.target.value) || 1500)}
                  className="input w-full val-mono" />
         </div>
       </div>
@@ -121,9 +127,9 @@ export function TiltPanel({ t }: Props) {
           <div className="label mb-1">DIR (offset+ 时 PWM 方向)</div>
           <div className="flex">
             <button className={'btn flex-1 rounded-r-none ' + (dir === 1 ? 'btn-primary' : '')}
-                    onClick={() => setParam(dirKey, 1)}>+1 PWM↑</button>
+                    onClick={() => pushParam(dirKey, 1)}>+1 PWM↑</button>
             <button className={'btn flex-1 rounded-l-none border-l-0 ' + (dir === -1 ? 'btn-primary' : '')}
-                    onClick={() => setParam(dirKey, -1)}>−1 PWM↓</button>
+                    onClick={() => pushParam(dirKey, -1)}>−1 PWM↓</button>
           </div>
         </div>
         <div>
