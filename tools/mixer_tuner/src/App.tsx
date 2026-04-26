@@ -23,7 +23,7 @@ const TABS = [
 ];
 
 export default function App() {
-  const { currentTab, setTab, currentSpeed, currentGear, currentPhase, params, simulateArmed, setParam } = useStore();
+  const { currentTab, setTab, currentSpeed, currentGear, currentPhase, params, simulateArmed, setParam, setSimulateArmed } = useStore();
   const [gcsConnected, setGcsConnected] = useState(false);
   const [gcsArmed, setGcsArmed] = useState<boolean | null>(null);
   const [liveRc, setLiveRc] = useState<number[] | null>(null);
@@ -87,7 +87,11 @@ export default function App() {
   useEffect(() => {
     const off = gcs.on((m: GcsMessage) => {
       if (m.type === 'status') setGcsConnected(m.connected);
-      else if (m.type === 'heartbeat') setGcsArmed(m.armed);
+      else if (m.type === 'heartbeat') {
+        setGcsArmed(m.armed);
+        // 连接 FC 时自动跟随真实 arming 状态 (未连接时保留 simulate 给离线预览)
+        setSimulateArmed(m.armed);
+      }
       else if (m.type === 'rc') setLiveRc(m.channels);
       else if (m.type === 'statustext') {
         // 飞控也会发 "MSK gear/auto/mode/RTL ..." 切换提示, 转 toast

@@ -35,7 +35,7 @@ const INITIAL: AppState = {
   currentGear: 3,
   currentPhase: 'STATIONARY',
   phaseAutoSync: true,
-  simulateArmed: true,
+  simulateArmed: false,                            // 默认 false: 未连接 FC 时允许离线预览; 连接后由 heartbeat 实时驱动
   selectedCurve: 'KS',
   selectedTiltCurve: 'SGRP',
   curveMode: 'k',
@@ -114,17 +114,22 @@ export const useStore = create<AppState & Actions>()(
     {
       name: 'mantashark-tuner-v9',
       // Bumping version: 旧的 persisted state 会被 migrate() 处理. 改 schema 时 +1 强制清旧坏数据.
-      version: 3,
+      version: 4,
       migrate: (persisted: any, version: number) => {
-        // v3 之前的 schema 不兼容 (selectedCurve 可能存了非法值导致崩溃) → 重置 UI 状态.
+        // v3 之前: selectedCurve 可能存了非法值导致崩溃 → 重置 UI 状态.
+        // v4: simulateArmed 默认值改 false (旧的 true 会卡住调参 UI 显示"已 armed").
         if (!persisted || version < 3) {
-          return {
-            ...persisted,
+          persisted = {
+            ...(persisted || {}),
             selectedCurve: 'KS',
             selectedTiltCurve: 'SGRP',
             curveMode: 'k',
             currentTab: 'gcs',
           };
+        }
+        if (!persisted || version < 4) {
+          // 强制清掉旧的 simulateArmed=true, 让连接 FC 后由 heartbeat 驱动
+          persisted = { ...(persisted || {}), simulateArmed: false };
         }
         return persisted;
       },
