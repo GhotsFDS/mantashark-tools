@@ -11,6 +11,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write   # release assets 上传
+
 jobs:
   build-windows:
     runs-on: windows-latest

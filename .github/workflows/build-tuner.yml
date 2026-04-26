@@ -10,6 +10,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write   # 允许 softprops/action-gh-release 写 release assets
+
 jobs:
   build-windows:
     runs-on: windows-latest
