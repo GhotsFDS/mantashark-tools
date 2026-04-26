@@ -108,6 +108,9 @@ class LogAnalyzer:
         self.msk_emergency = []       # (t, 'STOP'|'released')
         self.msk_errors = []          # (t, err_text)  MSK ERR: ...
         self.msk_att_guard = []       # (t, pitch, target, roll, corr)  ATT GUARD 事件
+        # v8 新增 (1Hz K 心跳 + RTL)
+        self.msk_k_history = []       # (t, S, DF, T, RD, spd_eff, spd_real)
+        self.msk_rtl_changes = []     # (t, 'ACTIVE'|'released')
 
     def parse(self):
         log = DFReader.DFReader_binary(self.path)
@@ -142,31 +145,55 @@ class LogAnalyzer:
                 self._parse_msg(ts, getattr(m, 'Message', ''))
         self.duration = ts if self.first_t else 0
 
-    _RE_MSK_MODE   = re.compile(r'^MSK:\s*(NOGPS|GPS_WEAK|GPS_FULL|GPS)\s*(?:GEAR\s*(\d+))?')
-    _RE_MSK_GEAR   = re.compile(r'GEAR\s+(\d)')
-    _RE_MSK_AUTO   = re.compile(r'^MSK:\s*AUTO\s+(ON|OFF)')
+    # v7 旧格式 (`MSK: NOGPS GEAR 2`) 和 v8 新格式 (`MSK mode -> GPS gear=2` / `MSK gear -> 2 (V2 hump)`) 都兼容
+    _RE_MSK_MODE   = re.compile(r'^MSK(?::\s*|\s+mode\s*->\s*)(NOGPS|GPS_WEAK|GPS_FULL|GPS)(?:\s*\(curve\))?\s*(?:GEAR\s*(\d+)|gear=(\d+))?')
+    _RE_MSK_GEAR   = re.compile(r'^MSK\s+gear\s*->\s*(\d+)')              # v8: MSK gear -> 2 (V2 hump)
+    _RE_MSK_AUTO   = re.compile(r'^MSK(?::\s*AUTO\s+(ON|OFF)|\s+auto\s*->\s*(AUTO|MANUAL))')
     _RE_MSK_CHK    = re.compile(r'^MSK\s*CHK[:\s].*')
     _RE_MSK_STOP   = re.compile(r'^MSK:\s*EMERGENCY STOP')
     _RE_MSK_REL    = re.compile(r'^MSK:\s*emergency released')
     _RE_MSK_ERR    = re.compile(r'^MSK ERR:\s*(.*)')
+    # v8 新增: 1Hz K 系数心跳 + RTL
+    _RE_MSK_K_HB   = re.compile(r'^MSK\s+K:\s*S=(\d+)\s+DF=(\d+)\s+T=(\d+)\s+RD=(\d+).*?spd=([\d.]+)/([\d.]+)')
+    _RE_MSK_RTL    = re.compile(r'^MSK\s+RTL\s+(ACTIVE|released)')
     _RE_ATT_GUARD  = re.compile(r'^ATT GUARD:\s*P=([-0-9.]+)\(t=([-0-9.]+)\)\s*R=([-0-9.]+)\s*corr=([-0-9.]+)')
     _RE_LUA_ERR    = re.compile(r'^Lua:\s*.*?:(\d+):\s*(.*)')
 
     def _parse_msg(self, ts, text):
         if not text: return
-        # 模式 + 档位
+        # 模式 + 档位 (v7 + v8 兼容)
         m = self._RE_MSK_MODE.match(text)
         if m:
-            mode = m.group(1); gear = m.group(2)
+            mode = m.group(1); gear = m.group(2) or m.group(3)
             if not self.msk_mode_changes or self.msk_mode_changes[-1][1] != mode:
                 self.msk_mode_changes.append((ts, mode))
             if gear and (not self.msk_gear_changes or self.msk_gear_changes[-1][1] != int(gear)):
                 self.msk_gear_changes.append((ts, int(gear)))
             return
-        # AUTO ON/OFF
+        # v8 单独的档位事件 (`MSK gear -> 2 (V2 hump)`)
+        m = self._RE_MSK_GEAR.match(text)
+        if m:
+            g = int(m.group(1))
+            if not self.msk_gear_changes or self.msk_gear_changes[-1][1] != g:
+                self.msk_gear_changes.append((ts, g))
+            return
+        # AUTO ON/OFF (v7 v8 兼容)
         m = self._RE_MSK_AUTO.match(text)
         if m:
-            self.msk_auto_changes.append((ts, m.group(1)))
+            v = m.group(1) or m.group(2)
+            self.msk_auto_changes.append((ts, v))
+            return
+        # v8: 1Hz K 心跳
+        m = self._RE_MSK_K_HB.match(text)
+        if m:
+            self.msk_k_history.append((ts,
+                int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)),
+                float(m.group(5)), float(m.group(6))))
+            return
+        # v8: RTL 状态
+        m = self._RE_MSK_RTL.match(text)
+        if m:
+            self.msk_rtl_changes.append((ts, m.group(1)))
             return
         # 预检
         if self._RE_MSK_CHK.match(text):
@@ -501,13 +528,14 @@ class LogAnalyzer:
                         print(f"  t={ts:6.1f}s  {name}: {last[ch]} → {pos} (PWM {v})")
                     last[ch] = pos
 
-    # ═══ 9. MSK 模式/档位/Auto 时间线 ═══
+    # ═══ 9. MSK 模式/档位/Auto/RTL 时间线 ═══
     def msk_timeline(self):
-        has_any = self.msk_mode_changes or self.msk_gear_changes or self.msk_auto_changes
+        has_any = (self.msk_mode_changes or self.msk_gear_changes or
+                   self.msk_auto_changes or self.msk_rtl_changes)
         if not has_any:
             return
         print(colored("\n" + "="*72, C.CYN))
-        print(colored("  9. MSK Lua 模式时间线", C.CYN+C.BOLD))
+        print(colored("  9. MSK Lua 模式/档位/Auto/RTL 时间线", C.CYN+C.BOLD))
         print(colored("="*72, C.CYN))
         events = []
         for ts, mode in self.msk_mode_changes:
@@ -516,12 +544,21 @@ class LogAnalyzer:
             events.append((ts, 'GEAR', f'G{gear}'))
         for ts, auto in self.msk_auto_changes:
             events.append((ts, 'AUTO', auto))
+        for ts, rtl in self.msk_rtl_changes:
+            events.append((ts, 'RTL', rtl))
         events.sort()
         for ts, kind, val in events[:60]:
-            col = {'MODE':C.CYN, 'GEAR':C.YEL, 'AUTO':C.MAG}.get(kind, C.END)
+            col = {'MODE':C.CYN, 'GEAR':C.YEL, 'AUTO':C.MAG, 'RTL':C.RED}.get(kind, C.END)
             print(f"  t={ts:7.1f}s  {colored(kind, col):15s} → {val}")
         if len(events) > 60:
             print(f"  ... ({len(events)-60} 更多事件省略)")
+
+        # v8: 1Hz K 心跳节区 (新增, 供调参核对实际生效 K)
+        if self.msk_k_history:
+            print(colored(f"\n  [K 心跳 {len(self.msk_k_history)} 条 (1Hz)]  采样首/末:", C.CYN))
+            for entry in [self.msk_k_history[0], self.msk_k_history[-1]]:
+                ts, ks, kdf, kt, krd, sp_e, sp_r = entry
+                print(f"  t={ts:7.1f}s  S={ks:3d} DF={kdf:3d} T={kt:3d} RD={krd:3d}  spd_eff={sp_e:.1f}/真={sp_r:.1f}")
 
     # ═══ 10. 预检流程事件 ═══
     def preflight_events(self):
