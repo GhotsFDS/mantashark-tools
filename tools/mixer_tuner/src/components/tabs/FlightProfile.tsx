@@ -73,20 +73,22 @@ export function FlightProfile({ effectiveSpeed, currentK }: Props) {
 
   // 当前 mode 涉及的参数 keys
   const curveKeys = useMemo(() => {
-    if (isK) {
-      const ks: string[] = ['MSK_V1','MSK_V2','MSK_V3','MSK_V_MAX',
-                            'MSK_TRIM_G1','MSK_TRIM_G2','MSK_TRIM_G3',
-                            'MSK_TRIM0','MSK_TRIM1','MSK_TRIM2','MSK_TRIM3','MSK_TRIM4'];
-      for (const g of ['KS','KDF','KT','KRD']) {
-        for (let i=0; i<5; i++) ks.push(`MSK_${g}${i}`);
-      }
-      return ks;
-    } else {
-      const ks: string[] = [];
-      for (const t of TILTS) for (let i=0; i<5; i++) ks.push(`TLTC_${t.alias}_K${i}`);
-      return ks;
+    // joint 模式: K 曲线 + 倾转曲线一起拉/推 (用户调任一组都要同步, 避免遗漏)
+    // K 模式: 只 K 曲线 + V 断点 + trim
+    // tilt 模式: 只倾转曲线
+    const k_keys: string[] = ['MSK_V1','MSK_V2','MSK_V3','MSK_V_MAX',
+                              'MSK_TRIM_G1','MSK_TRIM_G2','MSK_TRIM_G3',
+                              'MSK_TRIM0','MSK_TRIM1','MSK_TRIM2','MSK_TRIM3','MSK_TRIM4'];
+    for (const g of ['KS','KDF','KT','KRD']) {
+      for (let i=0; i<5; i++) k_keys.push(`MSK_${g}${i}`);
     }
-  }, [isK]);
+    const tilt_keys: string[] = [];
+    for (const t of TILTS) for (let i=0; i<5; i++) tilt_keys.push(`TLTC_${t.alias}_K${i}`);
+
+    if (isK)    return k_keys;
+    if (isJoint) return [...k_keys, ...tilt_keys];
+    return tilt_keys;  // tilt 模式
+  }, [isK, isJoint]);
 
   const [syncBusy, setSyncBusy] = useState<null | { mode:'pull'|'push'; got:number; total:number; msg?:string }>(null);
 

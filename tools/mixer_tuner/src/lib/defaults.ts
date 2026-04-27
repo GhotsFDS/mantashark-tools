@@ -86,8 +86,6 @@ export const DEFAULT_PARAMS: ParamSet = {
   GRD_TRIM_RATE: 0.5,
   GRD_PIT_WARN:  20.0,
   GRD_ROL_WARN:  25.0,
-  GRD_DEAD_DEG:  8.0,           // ATC 软干预死区: |pitch-target| ≤ 8° 不干预
-  GRD_FULL_DEG: 25.0,           // ATC 满干预阈值: |pitch-target| ≥ 25° 完全接入
 
   // ═══ PRE_ (preflight, key=85) ═══
   PRE_CH:     8,
@@ -221,8 +219,6 @@ export const PARAM_LABELS: Record<string, string> = {
   GRD_TRIM_RATE:'Q_TRIM 推进率 (°/s)',
   GRD_PIT_WARN: '俯仰告警阈值 (°)',
   GRD_ROL_WARN: '横滚告警阈值 (°)',
-  GRD_DEAD_DEG: 'ATC 软干预死区 (°), |pitch-target| 内不强制干预',
-  GRD_FULL_DEG: 'ATC 满干预阈值 (°), 偏离超过则完全接入 ATC',
 
   // ─── PRE_ preflight ───
   PRE_CH:     '预检 RC 通道 (1-16)',
