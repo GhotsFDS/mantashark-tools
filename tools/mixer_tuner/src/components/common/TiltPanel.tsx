@@ -20,7 +20,7 @@ export function TiltPanel({ t }: Props) {
   const dirKey  = `TLT_${t.alias}_DIR`;
   const lminKey = `TLT_${t.alias}_LMIN`;   // 偏移量下界 (≤0 一般)
   const lmaxKey = `TLT_${t.alias}_LMAX`;   // 偏移量上界 (≥0 一般)
-  const ovrKey  = `PRE_OVR_${t.alias}`;
+  const ovrKey  = `TLT_${t.alias}_PRV`;
   const zero = params[zeroKey];
   const dir = params[dirKey];
   const lminOff = params[lminKey] ?? -45;
@@ -59,8 +59,7 @@ export function TiltPanel({ t }: Props) {
   const exitPreview = () => {
     setParam(ovrKey, -1);
     gcs.setParam(ovrKey, -1);
-    const k0 = params[`TLTC_${t.alias}_K0`] ?? TILT_NEUTRAL_ABS_DEG;
-    setTiltPreview(t.id, k0);
+    setTiltPreview(t.id, TILT_NEUTRAL_ABS_DEG);
   };
 
   React.useEffect(() => {
@@ -121,15 +120,18 @@ export function TiltPanel({ t }: Props) {
         </div>
       </div>
 
-      {/* 方向 + PER_DEG */}
+      {/* 方向 (三态: +1 / 0 锁 / -1) + PER_DEG */}
       <div className="grid grid-cols-2 gap-2 mt-3">
         <div>
-          <div className="label mb-1">DIR (offset+ 时 PWM 方向)</div>
+          <div className="label mb-1">DIR (0=锁定永远 ZERO PWM)</div>
           <div className="flex">
             <button className={'btn flex-1 rounded-r-none ' + (dir === 1 ? 'btn-primary' : '')}
-                    onClick={() => pushParam(dirKey, 1)}>+1 PWM↑</button>
-            <button className={'btn flex-1 rounded-l-none border-l-0 ' + (dir === -1 ? 'btn-primary' : '')}
-                    onClick={() => pushParam(dirKey, -1)}>−1 PWM↓</button>
+                    onClick={() => pushParam(dirKey, 1)}>+1 ↑</button>
+            <button className={'btn flex-1 rounded-none border-l-0 border-r-0 ' + (dir === 0 ? 'btn-primary' : '')}
+                    onClick={() => pushParam(dirKey, 0)}
+                    title="锁定: 不响应任何指令, PWM 永远 = ZERO (用于未校准舵机安全锁)">0 锁</button>
+            <button className={'btn flex-1 rounded-l-none ' + (dir === -1 ? 'btn-primary' : '')}
+                    onClick={() => pushParam(dirKey, -1)}>−1 ↓</button>
           </div>
         </div>
         <div>

@@ -13,11 +13,11 @@ import { Preflight } from './components/tabs/Preflight';
 import { Params } from './components/tabs/Params';
 import { Gcs } from './components/tabs/Gcs';
 
+// v9 P3.6: GCS / 飞行配置 (3 档) / 舵机标定 / 预检 / 参数
 const TABS = [
   { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
-  { id: 'profile',   label: '曲线 & 阶段',  Icon: Waves },
+  { id: 'profile',   label: '飞行配置',     Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
-  { id: 'geometry',  label: '几何 & 布局',  Icon: Grid3x3 },
   { id: 'preflight', label: '预检',         Icon: PlayCircle },
   { id: 'params',    label: '参数',         Icon: Settings },
 ];

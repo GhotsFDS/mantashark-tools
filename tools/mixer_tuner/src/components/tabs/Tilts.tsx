@@ -33,7 +33,6 @@ export function Tilts() {
             <div className="text-[9px] text-fg-dim mt-1">{cplOn ? '反向补偿 DFL/DFR' : '关闭补偿'}</div>
           </div>
           <GlobalField label="耦合 K 系数" k="TLT_CPL_SDF_K" unit="" step={0.05} min={0} max={1} pushParam={pushParam} disabled={!cplOn} />
-          <GlobalField label="T1 实验范围 ±" k="TLT_T1_DEG" unit="°" step={1} pushParam={pushParam} />
           <div>
             <div className="label mb-1">全局 PWM 范围</div>
             <div className="input opacity-70 val-mono">500 .. 2500 μs</div>
@@ -53,7 +52,7 @@ export function Tilts() {
           <li><b>ZERO</b>: 舵臂物理 0° 对应的 PWM. 装机后松开舵臂锁定螺丝, 手动调到机械中立, 读当前 PWM 写入.</li>
           <li><b>DIR</b>: 命令 +30° 时舵机应转到哪一侧. 装反 → 改 -1. 镜像对默认 +1/-1.</li>
           <li><b>PWM/°</b>: 90° 舵机在 1000-2000μs 下理论 11.11, 实测 8.33 保守 (留余量).</li>
-          <li>最终 PWM = <b>ZERO + DIR × PWM_PER_DEG × 目标角度</b>, 硬 clamp 到 [800, 2200]</li>
+          <li>最终 PWM = <b>ZERO + DIR × PWM_PER_DEG × 目标角度</b>, 硬 clamp 到 [500, 2500]</li>
           <li>tilt_driver.lua 会额外对 DFL/DFR 做 S→DF 反向耦合补偿 (基于 TLT_CPL_SDF_K × S_GROUP_TILT)</li>
         </ul>
       </div>

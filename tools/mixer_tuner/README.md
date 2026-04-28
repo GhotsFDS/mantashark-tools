@@ -1,53 +1,86 @@
-# MantaShark Mixer Tuner v9
+# MantaShark Mixer Tuner
 
-MantaShark 水上地效飞行器 (WIG) 的调参/调试 SPA, 对应 `scripts-plane/` v8 Lua 混控.
+MantaShark WIG 飞行器调参/调试 SPA + MAVLink 桥, 对应 `scripts/` 飞控 Lua.
 
-## 功能
+## 功能 (v8.4 状态)
 
-- **PCHIP 曲线编辑** — 4 条 K 曲线 (KS/KDF/KT/KRD), 拖点调 (V, K), 和 Lua/scipy 数值一致
-- **7 舵机标定** — 每舵 ZERO (0° PWM) + DIR (±1) + ±30° 实时预览 + 全局统一 PWM/°
-- **12 EDF 布局** — 实时推力%可视化 (圆圈大小)
-- **动态几何分析** — RDL/RDR tilt 角变化时 pitch/yaw 系数自动插值
-- **S→DF 耦合** — 滑杆调 `TLT_CPL_SDF_K`, 实时看 DFL/DFR 补偿后最终角 + 饱和告警
-- **Phase 状态机** — 滞回阈值实时显示, PHASE_CONFIG (5 phase × 7 tilt + trim) 表格编辑
-- **力平衡** — 总推力 vs 机重 98N, T/W ratio, thrust∝throttle^1.5 非线性曲线
-- **4 阶段预检模拟** — 播放 Stage 1-4, 参数可调
-- **导入/导出 .parm** — ArduPilot GCS 兼容格式 + phase_config.lua 片段
+- **K 曲线编辑** — 4 组 (KS/KDF/KT/KRD) × 5 控制点 PCHIP, 拖点调 (V, K)
+- **倾转曲线** — 7 路 tilt × 5 PCHIP 控制点 (`TLTC_*`)
+- **5 点 trim 曲线** — Q_TRIM_PITCH 速度曲线 (`MSK_TRIM0..4`)
+- **7 舵机实时标定** — ZERO/DIR/LMIN/LMAX 拖滑杆即推 FC 生效
+- **S→DF 耦合 ON/OFF** — `TLT_CPL_EN` toggle + `TLT_CPL_SDF_K` 实时调
+- **12 EDF 布局** — 实时推力% 可视化 + 动态几何分析
+- **GCS 标签页** — RC 12 路 + SERVO 输出 + 电池 + 模式/档位/Auto/RTL chips + STATUSTEXT (UTF-8)
+- **4 阶段预检** — 模拟 + 实机触发
+- **导入/导出 .parm** — ArduPilot 兼容格式
+- **拉取/推送** — 同步飞控参数 (双向)
 
 ## 开发
 
 ```bash
 cd tools/mixer_tuner
 npm install
-npm run dev        # http://localhost:5173, 热重载
+npm run dev    # http://localhost:5173 热重载
 ```
 
 ## 打包
 
 ```bash
-npm run build      # 产出 dist/index.html, 单文件可离线使用
+npm run build  # dist/index.html 单文件 (内联 JS/CSS)
 ```
 
-输出 `dist/index.html` 内联所有 JS/CSS, 无需服务器, 直接拖进浏览器即可.
+CI 在 `mantashark-tools` 公开仓自动构建 Win/Linux 二进制 release。
 
-## 栈
+## 启动 (用户)
+
+```bash
+cd tools/mixer_tuner && ./launch.sh
+# 自动起 mavbridge.py (ws://127.0.0.1:8765) + 浏览器
+```
+
+## 技术栈
 
 - Vite + React 18 + TypeScript
-- Zustand (状态 + localStorage 持久化)
-- TailwindCSS (样式)
+- Zustand (状态 + localStorage 持久化, version 4)
+- TailwindCSS
 - lucide-react (图标)
 - vite-plugin-singlefile (单 HTML 产物)
-- Canvas 手绘 PCHIP 曲线 + 12 电机布局
 
-## 与 Lua 代码对齐
+## 与 Lua 代码对齐 (v8.4 参数表)
 
-| Tuner | Lua 文件 | 参数前缀 |
+| Tuner 模块 | Lua 文件 | 参数前缀 (key) |
 |---|---|---|
-| K 曲线 | `scripts-plane/mixer.lua` | `MSK_` (25 K + 4 V) |
-| 舵机 | `scripts-plane/tilt_driver.lua` | `TLT_` (7 ZERO + 7 DIR + PWM_PER_DEG + CPL_SDF_K) |
-| Phase | `scripts-plane/phases.lua` | 无 (Lua 硬编码, 本工具导 lua 片段替换) |
-| 姿态 guard | `scripts-plane/guard.lua` | `GRD_` (TRIM_RATE, PIT_WARN, ROL_WARN) |
-| 预检 | `scripts-plane/preflight.lua` | `PRE_` (CH/PWM/STOP/GRP_MS/TILT_MAX) |
+| K 曲线 + 速度断点 + 模式开关 + trim 曲线 | `scripts/modules/mixer.lua` + `scripts/main.lua` | `MSK_` (81), ~37 个 |
+| 舵机标定 (ZERO/DIR/LMIN/LMAX) + 耦合 | `scripts/modules/tilt_driver.lua` | `TLT_` (82), ~32 个 |
+| 几何系数 (12 motor × P/R/Y) | `scripts/modules/mixer.lua` | `MGEO_` (83), 36 个 |
+| 姿态 guard (TRIM_RATE / PIT_WARN / ROL_WARN) | `scripts/modules/guard.lua` | `GRD_` (84), 3 个 |
+| 预检 + 实时角度预览 | `scripts/modules/preflight.lua` | `PRE_` (85), 12 个 |
+| 倾转 PCHIP 曲线 (7 × 5) | `scripts/main.lua` | `TLTC_` (86), 35 个 |
 
-PCHIP 实现 (`src/lib/pchip.ts`) 和 Lua 侧 (`scripts-plane/mixer.lua:interp5`) 以及
-scipy.interpolate.PchipInterpolator 数值完全一致 (误差 ≤1e-4 浮点级).
+PCHIP 实现 (`src/lib/pchip.ts`) 和 Lua 侧 (`scripts/modules/mixer.lua:interp5`) 数值一致, 与 scipy.interpolate.PchipInterpolator 误差 ≤1e-4。
+
+## v9 重构方向 (待做)
+
+- 删 PCHIP 编辑器 (K + tilt 都改 2 档静态值表)
+- defaults.ts 删 ~70 PCHIP 参数, 加 ~24 静态档位参数
+- FlightProfile tab 重写为 2 档参数表
+- mavbridge 加 TECS target_airspeed 显示
+
+详见 `docs/PROGRESS.md`。
+
+## 文件树 (核心)
+
+```
+mixer_tuner/
+├── src/
+│   ├── App.tsx                  顶层 (tabs + status bar + toast)
+│   ├── components/
+│   │   ├── tabs/                FlightProfile / Tilts / Geometry / Preflight / Gcs / Params
+│   │   └── common/              TiltPanel / CurveEditor / ScaledCanvas
+│   ├── lib/                     gcs.ts / pchip.ts / actuators.ts / defaults.ts / types.ts
+│   └── store/useStore.ts        Zustand persist (version 4)
+├── mavbridge.py                 MAVLink ↔ WebSocket 桥 (Python pymavlink + websockets)
+├── launch.sh / launch.bat       一键启动 (mavbridge + 浏览器)
+├── package.json + vite.config   构建配置
+└── dist/index.html              单文件 build 产物 (build 后)
+```

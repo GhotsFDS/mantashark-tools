@@ -9,3 +9,5 @@ venv/
 *.bak
 *.swp
 .DS_Store
+node_modules/
+*.tsbuildinfo

@@ -1,336 +1,336 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { CurveEditor } from '../common/CurveEditor';
+// v9 P2 飞行配置 tab — 3 档 G1/G2/G3 调参 (4 K + 7 倾转 + 平滑速率)
+// 拖输入实时推 FC PARAM_SET, lua tilt_driver.set_mode 切档时读这些参数
+import React from 'react';
 import { useStore } from '../../store/useStore';
-import type { GroupKey, TiltId } from '../../lib/types';
-import { TILT_IDS, PHASES, GROUP_COLORS, GROUP_LABELS, TILTS, MOTORS, SINGLE_MOTOR_MAX_N, VEHICLE_WEIGHT_N } from '../../lib/actuators';
-import { pchip5 } from '../../lib/pchip';
 import { gcs } from '../../lib/gcs';
-import { Upload, Download, Link2 } from 'lucide-react';
 
-interface Props {
-  effectiveSpeed: number;
-  currentK: Record<GroupKey, number>;
-}
+const GEARS = ['G1', 'G2', 'G3'] as const;
+type Gear = typeof GEARS[number];
 
-// K 组 → 该组关联的 tilt id
-const K_TO_TILTS: Record<GroupKey, TiltId[]> = {
-  KS:  ['S_GROUP_TILT'],
-  KDF: ['DFL', 'DFR'],
-  KT:  ['TL1', 'TR1'],
-  KRD: ['RDL', 'RDR'],
+const GEAR_LABELS: Record<Gear, string> = {
+  G1: '慢滑 (远程返航/对准)',
+  G2: '抬头建气垫 (静止/<2 m/s)',
+  G3: '巡航 (≥9 m/s)',
+};
+const GEAR_BASE_PITCH: Record<Gear, number> = { G1: 5, G2: 11, G3: 8 };
+const GEAR_DESC: Record<Gear, string> = {
+  G1: '浮筒承重 + KT 慢推. 油门 stick 直通基线.',
+  G2: 'KS+KDF 抬头, RD 反向上吹 (>90°) 抬头, 静态建气垫. 油门直通.',
+  G3: 'KT 主推 + 地效托底, RD 满下吹低头 (<90°). G3 速度环 P3 加.',
 };
 
-const ALIAS_MAP: Record<TiltId, string> = {
-  DFL:'DFL', DFR:'DFR', TL1:'TL1', TR1:'TR1', RDL:'RDL', RDR:'RDR', S_GROUP_TILT:'SGRP',
+const K_GROUPS = ['KS', 'KDF', 'KT', 'KRD'] as const;
+type KGroup = typeof K_GROUPS[number];
+const K_LABELS: Record<KGroup, string> = {
+  KS:  'KS — S 斜吹 (主升力+前推, 4 EDF)',
+  KDF: 'KDF — DF 前下吹 (升力辅+pitch快响应, 2 EDF)',
+  KT:  'KT — T 后推 (前推主, 4 EDF)',
+  KRD: 'KRD — RD 后斜 (pitch 主源, 2 EDF)',
 };
 
-export function FlightProfile({ effectiveSpeed, currentK }: Props) {
-  const { params, setParam, selectedCurve, setSelectedCurve, setPhaseConfig,
-          phaseConfig, currentPhase, currentSpeed, setSpeed, currentGear, setGear, simulateArmed,
-          curveMode, setCurveMode, mergeLR, setMergeLR } = useStore();
+const TILT_IDS = ['DFL', 'DFR', 'TL1', 'TR1', 'RDL', 'RDR', 'SGRP'] as const;
+type TiltId = typeof TILT_IDS[number];
+const TILT_LABELS: Record<TiltId, string> = {
+  DFL: 'DFL — 左前下吹 (0..75°)',
+  DFR: 'DFR — 右前下吹 (0..75°)',
+  TL1: 'TL1 — 左 T1 roll 主 (90..135°)',
+  TR1: 'TR1 — 右 T1 roll 主 (90..135°)',
+  RDL: 'RDL — 左后斜 (0..135°)',
+  RDR: 'RDR — 右后斜 (0..135°)',
+  SGRP:'SGRP — S 组中央 (0..75°)',
+};
 
-  const [gcsConnected, setGcsConnected] = useState(gcs.isConnected());
-  useEffect(() => {
-    const off = gcs.on(m => { if (m.type === 'status') setGcsConnected(m.connected); });
-    setGcsConnected(gcs.isConnected());
-    return () => { off(); };
-  }, []);
-
-  const V1 = params.MSK_V1, V2 = params.MSK_V2;
-  const isK = curveMode === 'k';
-  const isJoint = curveMode === 'joint';
-
-  // joint 模式下倾转曲线限制 (selectedCurve 关联的 tilt series id)
-  const tiltRestrict = useMemo(() => {
-    if (mergeLR) {
-      return { KS:['SGRP'], KDF:['DF'], KT:['T1'], KRD:['RD'] }[selectedCurve];
-    }
-    return {
-      KS: ['SGRP'],
-      KDF: ['DFL','DFR'],
-      KT:  ['TL1','TR1'],
-      KRD: ['RDL','RDR'],
-    }[selectedCurve];
-  }, [selectedCurve, mergeLR]);
-
-  // 当前 K 组关联的 tilt 实时角度
-  const liveTilts = useMemo(() => {
-    const out: Record<TiltId, number> = {} as any;
-    for (const t of TILTS) {
-      const a = ALIAS_MAP[t.id];
-      const K = [0,1,2,3,4].map(i => params[`TLTC_${a}_K${i}`] ?? 45);
-      out[t.id] = pchip5(effectiveSpeed, V1, V2, params.MSK_V3, params.MSK_V_MAX, K[0],K[1],K[2],K[3],K[4]);
-    }
-    return out;
-  }, [effectiveSpeed, params, V1, V2]);
-
-  const tiltsForGroup = K_TO_TILTS[selectedCurve];
-
-  // ─── 力平衡 (基于当前 K) ───
-  const totalThrust = MOTORS.reduce((s, m) => s + Math.max(0, Math.min(1, currentK[m.group] ?? 0)) * SINGLE_MOTOR_MAX_N, 0);
-  const tw = totalThrust / VEHICLE_WEIGHT_N;
-  const liftMargin = totalThrust - VEHICLE_WEIGHT_N;
-
-  // 当前 mode 涉及的参数 keys
-  const curveKeys = useMemo(() => {
-    // joint 模式: K 曲线 + 倾转曲线一起拉/推 (用户调任一组都要同步, 避免遗漏)
-    // K 模式: 只 K 曲线 + V 断点 + trim
-    // tilt 模式: 只倾转曲线
-    const k_keys: string[] = ['MSK_V1','MSK_V2','MSK_V3','MSK_V_MAX',
-                              'MSK_TRIM_G1','MSK_TRIM_G2','MSK_TRIM_G3',
-                              'MSK_TRIM0','MSK_TRIM1','MSK_TRIM2','MSK_TRIM3','MSK_TRIM4'];
-    for (const g of ['KS','KDF','KT','KRD']) {
-      for (let i=0; i<5; i++) k_keys.push(`MSK_${g}${i}`);
-    }
-    const tilt_keys: string[] = [];
-    for (const t of TILTS) for (let i=0; i<5; i++) tilt_keys.push(`TLTC_${t.alias}_K${i}`);
-
-    if (isK)    return k_keys;
-    if (isJoint) return [...k_keys, ...tilt_keys];
-    return tilt_keys;  // tilt 模式
-  }, [isK, isJoint]);
-
-  const [syncBusy, setSyncBusy] = useState<null | { mode:'pull'|'push'; got:number; total:number; msg?:string }>(null);
-
-  const saveCurves = async () => {
-    if (syncBusy) return;
-    if (!gcs.isConnected()) { setSyncBusy({ mode:'push', got:0, total:0, msg:'❌ 未连接 FC' }); setTimeout(() => setSyncBusy(null), 2500); return; }
-    const map: Record<string, number> = {};
-    for (const k of curveKeys) if (k in params) map[k] = params[k];
-    setSyncBusy({ mode:'push', got:0, total:Object.keys(map).length });
-    const r = await gcs.pushParams(map, (s, t) => setSyncBusy({ mode:'push', got:s, total:t }));
-    setSyncBusy({ mode:'push', got:r.acked, total:Object.keys(map).length,
-      msg: r.timedOut ? `⚠ 超时 ack ${r.acked}/${Object.keys(map).length}` : `✓ 已保存 ${r.acked}` });
-    setTimeout(() => setSyncBusy(null), 2500);
-  };
-  const pullCurves = async () => {
-    if (syncBusy) return;
-    if (!gcs.isConnected()) { setSyncBusy({ mode:'pull', got:0, total:0, msg:'❌ 未连接 FC' }); setTimeout(() => setSyncBusy(null), 2500); return; }
-    setSyncBusy({ mode:'pull', got:0, total:curveKeys.length });
-    const r = await gcs.pullParams(curveKeys, (g, t) => setSyncBusy({ mode:'pull', got:g, total:t }));
-    setSyncBusy({ mode:'pull', got:r.got, total:curveKeys.length,
-      msg: r.timedOut ? `⚠ 超时 ${r.got}/${curveKeys.length}` : `✓ 已拉取 ${r.got}` });
-    setTimeout(() => setSyncBusy(null), 2500);
+export function FlightProfile() {
+  const { params, setParam } = useStore();
+  const push = (k: string, v: number) => {
+    setParam(k, v);
+    if (gcs.isConnected()) gcs.setParam(k, v);
   };
 
   return (
-    <div className="grid grid-cols-12 gap-3">
-      {/* ═══ 顶部行: 速度 + 档位 + 模式切换 + 同步 (单行紧凑, 组别由曲线下方 chip 选) ═══ */}
-      <div className="card col-span-12 py-2">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-center gap-2 min-w-[260px] flex-1">
-            <span className="label whitespace-nowrap">速度</span>
-            <input type="range" min={0} max={params.MSK_V_MAX ?? 20} step={0.1}
-                   value={currentSpeed}
-                   onChange={e => setSpeed(parseFloat(e.target.value))}
-                   className="slider flex-1" />
-            <span className="val-mono text-accent w-14 text-right">{currentSpeed.toFixed(1)}</span>
-            <span className="text-fg-dim text-[10px]">m/s</span>
-          </div>
-          <div className="flex border border-line rounded overflow-hidden">
-            {[1,2,3].map(g => (
-              <button key={g} onClick={() => setGear(g as 1|2|3)}
-                      className={'px-2 py-1 text-[11px] ' + (currentGear === g ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}>
-                档{g}{g===1?' V1':g===2?' V2':' 全'}
-              </button>
-            ))}
-          </div>
-          <span className="text-[10px] text-fg-dim">评估 {effectiveSpeed.toFixed(1)}</span>
-
-          {/* ── 目标俯仰 (Q_TRIM_PITCH) ── NOGPS=档位离散, GPS=5点曲线 ── */}
-          <div className="flex items-center gap-1 text-[10px] border-l border-line pl-2 ml-1"
-               title="NOGPS: 档位 G1/G2/G3 离散; GPS: 5 点 PCHIP 速度曲线 T0..T4. guard 限速 0.5°/s 平滑">
-            <span className="text-fg-mute">目标°</span>
-            <span className="text-fg-dim">NOGPS</span>
-            {([1,2,3] as const).map(g => {
-              const key = `MSK_TRIM_G${g}` as const;
-              return (
-                <label key={g} className="flex items-center gap-0.5">
-                  <span className="text-fg-dim">G{g}</span>
-                  <input type="number" step={0.5} min={-15} max={20}
-                         value={params[key] ?? (g===1?5:g===2?8:11)}
-                         onChange={e => setParam(key, parseFloat(e.target.value) || 0)}
-                         className={'input val-mono text-right text-[10px] w-11 ' + (currentGear === g ? 'border-accent' : '')} />
-                </label>
-              );
-            })}
-            <span className="text-fg-dim ml-1">GPS曲线</span>
-            {([0,1,2,3,4] as const).map(i => {
-              const key = `MSK_TRIM${i}` as const;
-              const vlabels = ['V0','V1','V2','V3','Vmax'];
-              const dflt = [4,5,8,10,11][i];
-              return (
-                <label key={i} className="flex items-center gap-0.5" title={`${vlabels[i]} 处目标俯仰°`}>
-                  <span className="text-fg-dim">{vlabels[i]}</span>
-                  <input type="number" step={0.5} min={-15} max={20}
-                         value={params[key] ?? dflt}
-                         onChange={e => setParam(key, parseFloat(e.target.value) || 0)}
-                         className="input val-mono text-right text-[10px] w-11" />
-                </label>
-              );
-            })}
-          </div>
-
-          <label className="flex items-center gap-1 text-[10px] cursor-pointer">
-            <input type="checkbox" checked={mergeLR}
-                   onChange={e => setMergeLR(e.target.checked)}
-                   className="accent-accent" />
-            <Link2 size={10}/>合并左右
-          </label>
-
-          <div className="flex border border-line rounded overflow-hidden">
-            <button className={'px-3 py-1 text-[11px] ' + (curveMode === 'joint' ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
-                    onClick={() => setCurveMode('joint')} title="联调: 当前组 K + 关联倾转 同图双 Y 轴">联调</button>
-            <button className={'px-3 py-1 text-[11px] border-l border-line ' + (curveMode === 'k' ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
-                    onClick={() => setCurveMode('k')}>K 曲线</button>
-            <button className={'px-3 py-1 text-[11px] border-l border-line ' + (curveMode === 'tilt' ? 'bg-accent text-bg' : 'text-fg-mute hover:text-fg')}
-                    onClick={() => setCurveMode('tilt')}>倾转曲线</button>
-          </div>
-
-          <div className="ml-auto flex items-center gap-2">
-            {syncBusy && !syncBusy.msg && <span className="text-[10px] text-accent val-mono">{syncBusy.mode==='pull'?'⇣':'⇡'} {syncBusy.got}/{syncBusy.total}</span>}
-            {syncBusy?.msg && <span className={'text-[10px] val-mono ' + (syncBusy.msg.startsWith('✓') ? 'text-ok' : 'text-warn')}>{syncBusy.msg}</span>}
-            <button className="btn text-[11px] py-0.5 px-2"
-                    onClick={pullCurves} disabled={!!syncBusy || !gcsConnected}>
-              <Download size={11} className="inline mr-0.5"/>拉取
-            </button>
-            <button className="btn btn-primary text-[11px] py-0.5 px-2"
-                    onClick={saveCurves} disabled={!!syncBusy || !gcsConnected}>
-              <Upload size={11} className="inline mr-0.5"/>保存
-            </button>
-          </div>
+    <div className="space-y-3">
+      {/* 3 档摘要 */}
+      <div className="card">
+        <div className="card-title">v9 P2 — 3 档飞行配置 (ch7 切档)</div>
+        <div className="grid grid-cols-3 gap-3">
+          {GEARS.map(g => (
+            <div key={g} className="bg-panel-2 p-3 rounded">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-accent text-[14px]">{g}</span>
+                <span className="text-[10px] text-fg-dim">{GEAR_LABELS[g]}</span>
+              </div>
+              <div className="mt-2 flex items-center gap-2 text-[11px]">
+                <span className="text-fg-dim">base_pitch</span>
+                <span className="val-mono text-accent text-[16px]">{GEAR_BASE_PITCH[g]}°</span>
+              </div>
+              <div className="mt-1 text-[9px] text-fg-mute leading-snug">{GEAR_DESC[g]}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute">
+          ch7 PWM &lt;1300 = G1, 1300-1700 = G2, &gt;1700 = G3.
+          切档时 K 表 + 倾转 + Q_TRIM_PITCH(base_pitch) 同步阶跃.
+          倾转走 rate-limit 平滑 (TLT_RATE 默认 30°/s).
         </div>
       </div>
 
-      {/* ═══ 主区: 单 CurveEditor (joint 自带双 Y 轴, K/倾转单图) ═══ */}
-      <div className="card col-span-8">
-        <div className="card-title flex items-center gap-2">
-          {isJoint ? (
-            <>
-              <span style={{ color: GROUP_COLORS[selectedCurve] }}>● 联调 {selectedCurve}</span>
-              <span className="text-[10px] text-fg-dim font-normal">
-                K (实线 ← 左轴) + 关联倾转 (虚线 → 右轴 °)
-              </span>
-            </>
-          ) : (
-            <>
-              {isK ? 'K 曲线' : '倾转曲线'}
-              <span className="text-[10px] text-fg-dim font-normal">
-                {isK ? '4 组 · 速度 → 油门系数' : `7 路 tilt · 速度 → abs°`}
-              </span>
-            </>
-          )}
-        </div>
-        <CurveEditor effectiveSpeed={effectiveSpeed} height={420} showAll={true} mode={curveMode}/>
-      </div>
-
-      {/* 右侧: 实时数值 + 力平衡 */}
-      <div className="col-span-4 flex flex-col gap-3">
-        {/* 当前组实时值 (flex-1 撑满剩余高度对齐左侧曲线) */}
-        <div className="card flex-1 flex flex-col">
-          <div className="card-title text-[11px]">@ {effectiveSpeed.toFixed(1)} m/s 实时</div>
-          <div className="space-y-1.5">
-            {(['KS','KDF','KT','KRD'] as GroupKey[]).map(g => (
-              <div key={g} className="flex items-center gap-2">
-                <span className="val-mono text-[10px] w-10" style={{ color: GROUP_COLORS[g] }}>{g}</span>
-                <div className="h-1.5 bg-panel-2 rounded overflow-hidden flex-1">
-                  <div className="h-full transition-all" style={{ width: (currentK[g]*100)+'%', background: GROUP_COLORS[g] }} />
-                </div>
-                <span className="val-mono text-[10px] w-10 text-right">{(currentK[g]*100).toFixed(0)}%</span>
-              </div>
-            ))}
-          </div>
-          <div className="card-section mt-2">关联 tilt</div>
-          <div className="space-y-0.5">
-            {tiltsForGroup.map(tid => (
-              <div key={tid} className="flex items-center text-[10px]">
-                <span className="val-mono w-16">{tid}</span>
-                <span className="val-mono ml-auto">{liveTilts[tid].toFixed(0)}°</span>
-                <span className="text-fg-dim ml-1">({(liveTilts[tid]-45 >= 0 ? '+':'')}{(liveTilts[tid]-45).toFixed(0)})</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 力平衡 */}
-        <div className="card">
-          <div className="card-title text-[11px]">力平衡 @ 100% 油门</div>
-          <div className="grid grid-cols-3 gap-2 text-center">
-            <div>
-              <div className="text-[9px] text-fg-mute">总推力</div>
-              <div className="val-mono text-[14px]">{totalThrust.toFixed(0)}<span className="text-fg-dim text-[9px]">N</span></div>
-            </div>
-            <div>
-              <div className="text-[9px] text-fg-mute">机重</div>
-              <div className="val-mono text-[14px]">{VEHICLE_WEIGHT_N}<span className="text-fg-dim text-[9px]">N</span></div>
-            </div>
-            <div>
-              <div className="text-[9px] text-fg-mute">T/W</div>
-              <div className={'val-mono text-[14px] ' + (tw < 1 ? 'text-err' : tw < 1.5 ? 'text-warn' : 'text-ok')}>
-                {tw.toFixed(2)}
-              </div>
-            </div>
-          </div>
-          <div className="mt-2 text-[10px] text-center">
-            <span className="text-fg-mute">富余 </span>
-            <span className={'val-mono ' + (liftMargin < 0 ? 'text-err' : liftMargin < 20 ? 'text-warn' : 'text-ok')}>
-              {liftMargin >= 0 ? '+' : ''}{liftMargin.toFixed(0)} N
-            </span>
-          </div>
-        </div>
-
-        {/* Phase 信息 (离线 reference) */}
-        <div className="card border border-warn/20">
-          <div className="card-title text-[10px] flex items-center gap-1">
-            离线 Phase <span className="chip text-[8px] text-warn">未接入飞控</span>
-          </div>
-          <div className="text-[10px] text-fg-mute">
-            根据 V1/V2 推断: <b className={'val-mono ' + (currentPhase === 'EMERGENCY' ? 'text-err' : 'text-accent')}>{currentPhase}</b>
-          </div>
-          <div className="text-[9px] text-fg-dim mt-1">飞控用 v7 三档 (RC ch{params.MSK_GEAR_CH ?? 7})</div>
-        </div>
-      </div>
-
-      {/* ═══ 底部: 阶段配置表 (折叠, 离线 reference) ═══ */}
-      <details className="card col-span-12">
-        <summary className="cursor-pointer card-title flex items-center gap-2 mb-0">
-          阶段配置 (PHASE_CONFIG, 离线 reference)
-          <span className="chip text-[9px] text-warn">未接入飞控</span>
-          <span className="text-[10px] text-fg-dim font-normal">点击展开</span>
-        </summary>
-        <div className="overflow-x-auto mt-2">
-          <table className="w-full text-[10px]">
-            <thead>
-              <tr className="text-fg-mute border-b border-line">
-                <th className="text-left p-1">Phase</th>
-                <th className="text-center p-1">Q_TRIM°</th>
-                {TILT_IDS.map(id => <th key={id} className="text-center p-1 min-w-[55px]">{id}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {PHASES.map(p => (
-                <tr key={p} className="border-b border-line/30">
-                  <td className="p-1 val-mono">{p}</td>
-                  <td className="p-1">
-                    <input type="number" step={0.5}
-                           value={phaseConfig[p].trim}
-                           onChange={e => setPhaseConfig(p, 'trim', parseFloat(e.target.value) || 0)}
-                           className="input w-full val-mono text-right text-[10px]" />
-                  </td>
-                  {TILT_IDS.map(id => (
-                    <td key={id} className="p-1">
-                      <input type="number" step={1}
-                             value={phaseConfig[p].tilts[id]}
-                             onChange={e => setPhaseConfig(p, id, parseFloat(e.target.value) || 0)}
-                             className="input w-full val-mono text-right text-[10px]" />
-                    </td>
-                  ))}
-                </tr>
+      {/* K 表 4 × 3 */}
+      <div className="card">
+        <div className="card-title">K 油门系数 — motor[i] = throttle × K_group × thr_cap</div>
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-line">
+              <th className="text-left py-1.5 pr-2 text-fg-dim w-2/5">分组</th>
+              {GEARS.map(g => (
+                <th key={g} className="text-center py-1.5 px-1 text-accent">{g}</th>
               ))}
-            </tbody>
-          </table>
+            </tr>
+          </thead>
+          <tbody>
+            {K_GROUPS.map(k => (
+              <tr key={k} className="border-b border-line/30">
+                <td className="py-1.5 pr-2 text-fg-mute">{K_LABELS[k]}</td>
+                {GEARS.map(g => {
+                  const key = `MSK_${k}_${g}`;
+                  const val = params[key] ?? 0;
+                  return (
+                    <td key={g} className="px-1 py-1">
+                      <input
+                        type="number" min={0} max={1} step={0.01}
+                        value={val}
+                        onChange={e => push(key, Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
+                        className="input val-mono text-center w-full"
+                      />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 倾转 7 × 3 */}
+      <div className="card">
+        <div className="card-title">倾转目标 abs° — mode 切档 rate-limited 平滑到目标</div>
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="border-b border-line">
+              <th className="text-left py-1.5 pr-2 text-fg-dim w-2/5">舵机</th>
+              {GEARS.map(g => (
+                <th key={g} className="text-center py-1.5 px-1 text-accent">{g}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {TILT_IDS.map(t => (
+              <tr key={t} className="border-b border-line/30">
+                <td className="py-1.5 pr-2 text-fg-mute">{TILT_LABELS[t]}</td>
+                {GEARS.map(g => {
+                  const key = `TLT_${t}_${g}`;
+                  const val = params[key] ?? 45;
+                  return (
+                    <td key={g} className="px-1 py-1">
+                      <input
+                        type="number" min={0} max={180} step={1}
+                        value={val}
+                        onChange={e => push(key, Math.max(0, Math.min(180, parseFloat(e.target.value) || 0)))}
+                        className="input val-mono text-center w-full"
+                      />
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          约定: 0° = 推力 −Y 沿机身正下 / 45° = 中立 (PWM ZERO) /
+          90° = +X 沿机身正前 / &gt;90° = 进 +Y 上半象限 (反向力矩).
+          软限位 (LMIN/LMAX) 在舵机标定 tab 单独设, 这里输入超出会被 clamp.
         </div>
-      </details>
+      </div>
+
+      {/* 全局 */}
+      <div className="card">
+        <div className="card-title">全局 (切档过渡)</div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <div className="label mb-1">tilt 平滑速率 (TLT_RATE)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={5} max={90} step={1}
+                value={params.TLT_RATE ?? 30}
+                onChange={e => push('TLT_RATE', Math.max(5, Math.min(90, parseFloat(e.target.value) || 30)))}
+                className="input val-mono w-24"
+              />
+              <span className="text-[10px] text-fg-dim">°/s</span>
+            </div>
+            <div className="text-[9px] text-fg-mute mt-1">
+              tilt 切档 rate (30 = 1.5s 完成 45° 过渡)
+            </div>
+          </div>
+          <div>
+            <div className="label mb-1">base_pitch ramp (TRIM_RATE)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="number" min={0} max={30} step={0.5}
+                value={params.MSK_TRIM_RATE ?? 3.0}
+                onChange={e => push('MSK_TRIM_RATE', Math.max(0, Math.min(30, parseFloat(e.target.value) || 3)))}
+                className="input val-mono w-24"
+              />
+              <span className="text-[10px] text-fg-dim">°/s</span>
+            </div>
+            <div className="text-[9px] text-fg-mute mt-1">
+              Q_TRIM_PITCH 切档过渡 (3 = 6° 用 2s, 0=阶跃). 防 ATC I 饱和
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* v9 P3.2/P3.4 tilt ATC + V 反馈 */}
+      <div className="card">
+        <div className="card-title">tilt ATC + V 反馈 (1Hz, G1/G3 启用, G2 跳过)</div>
+        <div className="grid grid-cols-4 gap-3">
+          <div>
+            <div className="label mb-1">启用 (FB_EN)</div>
+            <div className="flex">
+              <button
+                onClick={() => push('MSK_FB_EN', (params.MSK_FB_EN ?? 1) >= 0.5 ? 0 : 1)}
+                className={'btn flex-1 ' + ((params.MSK_FB_EN ?? 1) >= 0.5 ? 'btn-primary' : '')}
+              >{(params.MSK_FB_EN ?? 1) >= 0.5 ? 'ON' : 'OFF'}</button>
+            </div>
+            <div className="text-[9px] text-fg-mute mt-1">
+              motors:get_pitch/roll/V → bias SGRP/RD/T1
+            </div>
+          </div>
+          <div>
+            <div className="label mb-1">Pitch scale (P_SC)</div>
+            <input type="number" min={0} max={30} step={0.5}
+              value={params.MSK_FB_P_SC ?? 5}
+              onChange={e => push('MSK_FB_P_SC', Math.max(0, Math.min(30, parseFloat(e.target.value) || 5)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">SGRP+RD pitch 反馈 °/unit</div>
+          </div>
+          <div>
+            <div className="label mb-1">Roll scale (R_SC)</div>
+            <input type="number" min={0} max={30} step={0.5}
+              value={params.MSK_FB_R_SC ?? 5}
+              onChange={e => push('MSK_FB_R_SC', Math.max(0, Math.min(30, parseFloat(e.target.value) || 5)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">TL1/TR1 roll 反馈 °/unit</div>
+          </div>
+          <div>
+            <div className="label mb-1">RD V scale (V_SC)</div>
+            <input type="number" min={0} max={30} step={0.5}
+              value={params.MSK_FB_V_SC ?? 8}
+              onChange={e => push('MSK_FB_V_SC', Math.max(0, Math.min(30, parseFloat(e.target.value) || 8)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">G3+稳态 °/m/s err</div>
+          </div>
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          <b>速度协同</b>: T 组 (KT throttle) + S/RD (倾转) 协同, DF 不参与 (主姿态).
+          <b>RD 双职责</b>: |pitch_in|&gt;0.2 → pitch ATC 反馈; ≤0.2 + G3 → V 反馈助推
+          (慢→朝 90° max +75° / 快→朝默认 15°).
+          <b>SGRP</b>: 仅 pitch 反馈 (避免撞 0-75 软限). <b>TL1/TR1</b>: 仅 roll.
+          <b>G2→G3 跃迁</b> PI correction 1.5s ramp 防全推冲.
+        </div>
+      </div>
+
+      {/* v9 P3.5/P3.6 三层级加速参数 */}
+      <div className="card">
+        <div className="card-title">G3 三层级加速 (KT → 倾转改平 → 加力)</div>
+        <div className="grid grid-cols-4 gap-3">
+          <div>
+            <div className="label mb-1">KT 撞限阈值 (KT_LIM)</div>
+            <input type="number" min={0.5} max={1.0} step={0.01}
+              value={params.MSK_KT_LIM ?? 1.0}
+              onChange={e => push('MSK_KT_LIM', Math.max(0.5, Math.min(1.0, parseFloat(e.target.value) || 1)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">Layer 1→2 转换 (迟滞 0.95×)</div>
+          </div>
+          <div>
+            <div className="label mb-1">SGRP rate (°/s)</div>
+            <input type="number" min={0.5} max={30} step={0.5}
+              value={params.MSK_L2_SGRP_RT ?? 5.0}
+              onChange={e => push('MSK_L2_SGRP_RT', Math.max(0.5, Math.min(30, parseFloat(e.target.value) || 5)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 SGRP 改平</div>
+          </div>
+          <div>
+            <div className="label mb-1">RD rate (°/s)</div>
+            <input type="number" min={0.5} max={30} step={0.5}
+              value={params.MSK_L2_RD_RT ?? 3.0}
+              onChange={e => push('MSK_L2_RD_RT', Math.max(0.5, Math.min(30, parseFloat(e.target.value) || 3)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 RDL/RDR 改平</div>
+          </div>
+          <div>
+            <div className="label mb-1">K_drift rate (/s, P3.7)</div>
+            <input type="number" min={0} max={0.1} step={0.001}
+              value={params.MSK_K_DRFT_RT ?? 0.0}
+              onChange={e => push('MSK_K_DRFT_RT', Math.max(0, Math.min(0.1, parseFloat(e.target.value) || 0)))}
+              className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">0=关, 0.005-0.02=学习</div>
+          </div>
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          <b>Layer 1</b>: KT 单独加输出 (kt_eff &lt; KT_LIM). 不破坏姿态. <b>Layer 2</b>: KT 撞限 →
+          SGRP/RDL/RDR 慢调朝 90° 改平 (Mutex 锁 ATC pitch 反馈, ATC 自动加 KS 维持 pitch).
+          <b>Layer 3</b>: 倾转撞机械限位 = 飞机能力极限, 仅 STATUSTEXT 警告.
+          <b>P3.7 K_drift</b>: 1Hz 学习 motors:get_pitch 持续 5s+ → 慢加 KS/KDF drift (lua 内部, 不写 EEPROM).
+          切档/退出 G3 清零. 飞行后看 LOG MSK3.KSD/KDD 决定是否调 K_base.
+        </div>
+      </div>
+
+      {/* v9 P3.1 G3 PID 速度环 */}
+      <div className="card">
+        <div className="card-title">G3 速度环 (PID) — 进 G3 自动启用</div>
+        <div className="grid grid-cols-4 gap-3">
+          <div>
+            <div className="label mb-1">目标速度 V_TGT (m/s)</div>
+            <input
+              type="number" min={1} max={30} step={0.1}
+              value={params.MSK_V_TGT ?? 9.0}
+              onChange={e => push('MSK_V_TGT', Math.max(1, Math.min(30, parseFloat(e.target.value) || 9)))}
+              className="input val-mono w-full"
+            />
+          </div>
+          <div>
+            <div className="label mb-1">P 增益</div>
+            <input
+              type="number" min={0} max={1} step={0.01}
+              value={params.MSK_V_PI_P ?? 0.05}
+              onChange={e => push('MSK_V_PI_P', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.05)))}
+              className="input val-mono w-full"
+            />
+          </div>
+          <div>
+            <div className="label mb-1">I 增益</div>
+            <input
+              type="number" min={0} max={1} step={0.01}
+              value={params.MSK_V_PI_I ?? 0.02}
+              onChange={e => push('MSK_V_PI_I', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.02)))}
+              className="input val-mono w-full"
+            />
+          </div>
+          <div>
+            <div className="label mb-1">D 增益 (阻尼)</div>
+            <input
+              type="number" min={0} max={1} step={0.01}
+              value={params.MSK_V_PI_D ?? 0.0}
+              onChange={e => push('MSK_V_PI_D', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
+              className="input val-mono w-full"
+            />
+          </div>
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          G3 mode + ahrs:airspeed_estimate() 有效 → 自动 PID. correction = P×err + I×∫err − D×(dV/dt).
+          D 项用 V_actual 微分 (非 err 微分), 防 V_target 跳变引发 D 跳. 默认 0, 实飞振荡时调到 0.05-0.1.
+          correction clamp ±0.3 (±30% thr_cap), G1/G2 时 PID 状态清零防污染.
+        </div>
+      </div>
     </div>
   );
 }
