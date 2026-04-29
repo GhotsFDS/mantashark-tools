@@ -1,9 +1,11 @@
 // v9 P2 飞行配置 tab — 3 档 G1/G2/G3 调参 (4 K + 7 倾转 + 平滑速率)
-// 拖输入实时推 FC PARAM_SET, lua tilt_driver.set_mode 切档时读这些参数
-import React from 'react';
+// **不实时推送 FC** — 飞行参数效果不可见 (K/PID/base_pitch), 必须显式 "保存" 才下发.
+// 舵机标定 (Tilts) 是另一回事: 那里转动可见, 才允许实时推.
+import React, { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../../store/useStore';
 import { gcs } from '../../lib/gcs';
 import { NumInput } from '../common/NumInput';
+import { Download, Upload } from 'lucide-react';
 
 const GEARS = ['G1', 'G2', 'G3'] as const;
 type Gear = typeof GEARS[number];
@@ -41,15 +43,148 @@ const TILT_LABELS: Record<TiltId, string> = {
   SGRP:'SGRP — S 组中央 (0..75°)',
 };
 
+// 本 tab 管理的所有 FC 参数 key (Pull/Save 范围)
+const FLIGHT_KEYS: string[] = [
+  // 3 档 base_pitch
+  'MSK_BPCH_G1','MSK_BPCH_G2','MSK_BPCH_G3',
+  // 12 K (KS/KDF/KT/KRD × G1/G2/G3)
+  'MSK_KS_G1','MSK_KS_G2','MSK_KS_G3',
+  'MSK_KDF_G1','MSK_KDF_G2','MSK_KDF_G3',
+  'MSK_KT_G1','MSK_KT_G2','MSK_KT_G3',
+  'MSK_KRD_G1','MSK_KRD_G2','MSK_KRD_G3',
+  // 21 倾转 (7 路 × 3 档)
+  'TLT_DFL_G1','TLT_DFL_G2','TLT_DFL_G3',
+  'TLT_DFR_G1','TLT_DFR_G2','TLT_DFR_G3',
+  'TLT_TL1_G1','TLT_TL1_G2','TLT_TL1_G3',
+  'TLT_TR1_G1','TLT_TR1_G2','TLT_TR1_G3',
+  'TLT_RDL_G1','TLT_RDL_G2','TLT_RDL_G3',
+  'TLT_RDR_G1','TLT_RDR_G2','TLT_RDR_G3',
+  'TLT_SGRP_G1','TLT_SGRP_G2','TLT_SGRP_G3',
+  // 全局过渡速率
+  'TLT_RATE','MSK_TRIM_RATE',
+  // ATC tilt 反馈
+  'MSK_FB_EN','MSK_FB_P_SC','MSK_FB_R_SC','MSK_FB_V_SC',
+  // 三层级加速
+  'MSK_KT_LIM','MSK_L2_SGRP_RT','MSK_L2_RD_RT','MSK_K_DRFT_RT',
+  // G3 速度 PID
+  'MSK_V_TGT','MSK_V_PI_P','MSK_V_PI_I','MSK_V_PI_D',
+];
+
 export function FlightProfile() {
   const { params, setParam } = useStore();
-  const push = (k: string, v: number) => {
-    setParam(k, v);
-    if (gcs.isConnected()) gcs.setParam(k, v);
+  // 仅写本地 store, 不推 FC (用户必须按 "保存" 才下发)
+  const setLocal = (k: string, v: number) => setParam(k, v);
+
+  // ─── 同步状态: 最近一次 pull/push 后的快照 → 计算 dirty ───
+  const [synced, setSynced] = useState<Record<string, number>>(() => {
+    const s: Record<string, number> = {};
+    for (const k of FLIGHT_KEYS) if (k in params) s[k] = params[k];
+    return s;
+  });
+  const [busy, setBusy] = useState<'idle' | 'pulling' | 'pushing'>('idle');
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  // 计算 dirty (本地值 ≠ 最近 synced 值, 容差 1e-6 防浮点)
+  const dirtyKeys = useMemo(() => {
+    const d: string[] = [];
+    for (const k of FLIGHT_KEYS) {
+      const cur = params[k];
+      const snap = synced[k];
+      if (cur == null) continue;
+      if (snap == null || Math.abs(cur - snap) > 1e-6) d.push(k);
+    }
+    return d;
+  }, [params, synced]);
+
+  // 连接到 FC 后 1.5s (等 App-level autoSync 落 store) 重置 synced 快照, 让 dirty=0
+  useEffect(() => {
+    if (!gcs.isConnected()) return;
+    const t = setTimeout(() => {
+      const s: Record<string, number> = {};
+      for (const k of FLIGHT_KEYS) if (k in params) s[k] = params[k];
+      setSynced(s);
+    }, 1500);
+    return () => clearTimeout(t);
+    // 仅在挂载/参数表 keys 数量变化时重置
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onPull = async () => {
+    if (busy !== 'idle') return;
+    if (!gcs.isConnected()) { setStatusMsg('⚠ 未连接 FC'); setTimeout(() => setStatusMsg(null), 3000); return; }
+    setBusy('pulling');
+    setStatusMsg(`拉取 0/${FLIGHT_KEYS.length}`);
+    const r = await gcs.pullParams(FLIGHT_KEYS, (g, t) => setStatusMsg(`拉取 ${g}/${t}`));
+    // pull 完成后 store 已被 App-level listener 更新, 等 100ms 用 zustand 读最新 params (绕开闭包 stale)
+    setTimeout(() => {
+      const fresh = useStore.getState().params;
+      const s: Record<string, number> = {};
+      for (const k of FLIGHT_KEYS) if (k in fresh) s[k] = fresh[k];
+      setSynced(s);
+    }, 100);
+    setStatusMsg(r.timedOut
+      ? `⚠ 拉取超时 ${r.got}/${FLIGHT_KEYS.length}, 缺 ${r.missing.length}`
+      : `✓ 已拉取 ${r.got} 个参数`);
+    setBusy('idle');
+    setTimeout(() => setStatusMsg(null), 4000);
+  };
+
+  const onSave = async () => {
+    if (busy !== 'idle') return;
+    if (!gcs.isConnected()) { setStatusMsg('⚠ 未连接 FC'); setTimeout(() => setStatusMsg(null), 3000); return; }
+    if (dirtyKeys.length === 0) { setStatusMsg('已是最新, 无需保存'); setTimeout(() => setStatusMsg(null), 2500); return; }
+    setBusy('pushing');
+    const map: Record<string, number> = {};
+    for (const k of dirtyKeys) map[k] = params[k];
+    setStatusMsg(`保存 0/${dirtyKeys.length}`);
+    const r = await gcs.pushParams(map, (a, t) => setStatusMsg(`保存 ${a}/${t}`));
+    // 推送 ack 的部分写入 synced
+    setSynced(prev => {
+      const next = { ...prev };
+      for (const k of dirtyKeys) {
+        if (!r.missing.includes(k)) next[k] = params[k];
+      }
+      return next;
+    });
+    setStatusMsg(r.timedOut
+      ? `⚠ 保存超时 ${r.acked}/${dirtyKeys.length}, 缺 ${r.missing.length}`
+      : `✓ 已保存 ${r.acked} 个参数`);
+    setBusy('idle');
+    setTimeout(() => setStatusMsg(null), 4000);
   };
 
   return (
     <div className="space-y-3">
+      {/* Pull / Save toolbar (无实时推, 用户显式保存才下发) */}
+      <div className="card flex items-center gap-3 py-2">
+        <span className="card-title mb-0 flex-1">飞行配置同步</span>
+        <span className={
+          'val-mono text-[11px] ' +
+          (dirtyKeys.length > 0 ? 'text-warn' : 'text-fg-dim')
+        }>
+          {dirtyKeys.length > 0 ? `未保存 ${dirtyKeys.length} 项` : '与 FC 一致'}
+        </span>
+        {statusMsg && <span className="val-mono text-[11px] text-accent">{statusMsg}</span>}
+        <button
+          onClick={onPull}
+          disabled={busy !== 'idle'}
+          className="btn flex items-center gap-1.5 disabled:opacity-50"
+          title="从飞控读取 50 个飞行参数, 覆盖本地 (放弃未保存修改)"
+        >
+          <Download size={12} />
+          拉取 ({FLIGHT_KEYS.length})
+        </button>
+        <button
+          onClick={onSave}
+          disabled={busy !== 'idle' || dirtyKeys.length === 0}
+          className={'btn flex items-center gap-1.5 disabled:opacity-50 ' + (dirtyKeys.length > 0 ? 'btn-primary' : '')}
+          title="把本地修改下发到飞控 (仅推送已修改项)"
+        >
+          <Upload size={12} />
+          保存 ({dirtyKeys.length})
+        </button>
+      </div>
+
       {/* 3 档摘要 */}
       <div className="card">
         <div className="card-title">v9 P2 — 3 档飞行配置 (ch7 切档)</div>
@@ -63,7 +198,7 @@ export function FlightProfile() {
               <div className="mt-2 flex items-center gap-2 text-[11px]">
                 <span className="text-fg-dim">base_pitch</span>
                 <NumInput value={params[GEAR_BPCH_KEY[g]] ?? 0} min={0} max={20} step={0.5}
-                          onCommit={v => push(GEAR_BPCH_KEY[g], v)}
+                          onCommit={v => setLocal(GEAR_BPCH_KEY[g], v)}
                           className="input val-mono text-accent text-[14px] w-16 px-1.5 py-0.5" />
                 <span className="text-fg-dim text-[10px]">°</span>
               </div>
@@ -100,7 +235,7 @@ export function FlightProfile() {
                   return (
                     <td key={g} className="px-1 py-1">
                       <NumInput value={val} min={0} max={1} step={0.01}
-                                onCommit={v => push(key, v)}
+                                onCommit={v => setLocal(key, v)}
                                 className="input val-mono text-center w-full" />
                     </td>
                   );
@@ -133,7 +268,7 @@ export function FlightProfile() {
                   return (
                     <td key={g} className="px-1 py-1">
                       <NumInput value={val} min={0} max={180} step={1}
-                                onCommit={v => push(key, v)}
+                                onCommit={v => setLocal(key, v)}
                                 className="input val-mono text-center w-full" />
                     </td>
                   );
@@ -157,7 +292,7 @@ export function FlightProfile() {
             <div className="label mb-1">tilt 平滑速率 (TLT_RATE)</div>
             <div className="flex items-center gap-2">
               <NumInput value={params.TLT_RATE ?? 30} min={5} max={90} step={1}
-                        onCommit={v => push('TLT_RATE', v)}
+                        onCommit={v => setLocal('TLT_RATE', v)}
                         className="input val-mono w-24" />
               <span className="text-[10px] text-fg-dim">°/s</span>
             </div>
@@ -169,7 +304,7 @@ export function FlightProfile() {
             <div className="label mb-1">base_pitch ramp (TRIM_RATE)</div>
             <div className="flex items-center gap-2">
               <NumInput value={params.MSK_TRIM_RATE ?? 3.0} min={0} max={30} step={0.5}
-                        onCommit={v => push('MSK_TRIM_RATE', v)}
+                        onCommit={v => setLocal('MSK_TRIM_RATE', v)}
                         className="input val-mono w-24" />
               <span className="text-[10px] text-fg-dim">°/s</span>
             </div>
@@ -188,7 +323,7 @@ export function FlightProfile() {
             <div className="label mb-1">启用 (FB_EN)</div>
             <div className="flex">
               <button
-                onClick={() => push('MSK_FB_EN', (params.MSK_FB_EN ?? 1) >= 0.5 ? 0 : 1)}
+                onClick={() => setLocal('MSK_FB_EN', (params.MSK_FB_EN ?? 1) >= 0.5 ? 0 : 1)}
                 className={'btn flex-1 ' + ((params.MSK_FB_EN ?? 1) >= 0.5 ? 'btn-primary' : '')}
               >{(params.MSK_FB_EN ?? 1) >= 0.5 ? 'ON' : 'OFF'}</button>
             </div>
@@ -199,21 +334,21 @@ export function FlightProfile() {
           <div>
             <div className="label mb-1">Pitch scale (P_SC)</div>
             <NumInput value={params.MSK_FB_P_SC ?? 5} min={0} max={30} step={0.5}
-                      onCommit={v => push('MSK_FB_P_SC', v)}
+                      onCommit={v => setLocal('MSK_FB_P_SC', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">SGRP+RD pitch 反馈 °/unit</div>
           </div>
           <div>
             <div className="label mb-1">Roll scale (R_SC)</div>
             <NumInput value={params.MSK_FB_R_SC ?? 5} min={0} max={30} step={0.5}
-                      onCommit={v => push('MSK_FB_R_SC', v)}
+                      onCommit={v => setLocal('MSK_FB_R_SC', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">TL1/TR1 roll 反馈 °/unit</div>
           </div>
           <div>
             <div className="label mb-1">RD V scale (V_SC)</div>
             <NumInput value={params.MSK_FB_V_SC ?? 8} min={0} max={30} step={0.5}
-                      onCommit={v => push('MSK_FB_V_SC', v)}
+                      onCommit={v => setLocal('MSK_FB_V_SC', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">G3+稳态 °/m/s err</div>
           </div>
@@ -234,28 +369,28 @@ export function FlightProfile() {
           <div>
             <div className="label mb-1">KT 撞限阈值 (KT_LIM)</div>
             <NumInput value={params.MSK_KT_LIM ?? 1.0} min={0.5} max={1.0} step={0.01}
-                      onCommit={v => push('MSK_KT_LIM', v)}
+                      onCommit={v => setLocal('MSK_KT_LIM', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">Layer 1→2 转换 (迟滞 0.95×)</div>
           </div>
           <div>
             <div className="label mb-1">SGRP rate (°/s)</div>
             <NumInput value={params.MSK_L2_SGRP_RT ?? 5.0} min={0.5} max={30} step={0.5}
-                      onCommit={v => push('MSK_L2_SGRP_RT', v)}
+                      onCommit={v => setLocal('MSK_L2_SGRP_RT', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 SGRP 改平</div>
           </div>
           <div>
             <div className="label mb-1">RD rate (°/s)</div>
             <NumInput value={params.MSK_L2_RD_RT ?? 3.0} min={0.5} max={30} step={0.5}
-                      onCommit={v => push('MSK_L2_RD_RT', v)}
+                      onCommit={v => setLocal('MSK_L2_RD_RT', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 RDL/RDR 改平</div>
           </div>
           <div>
             <div className="label mb-1">K_drift rate (/s, P3.7)</div>
             <NumInput value={params.MSK_K_DRFT_RT ?? 0.0} min={0} max={0.1} step={0.001}
-                      onCommit={v => push('MSK_K_DRFT_RT', v)}
+                      onCommit={v => setLocal('MSK_K_DRFT_RT', v)}
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">0=关, 0.005-0.02=学习</div>
           </div>
@@ -276,25 +411,25 @@ export function FlightProfile() {
           <div>
             <div className="label mb-1">目标速度 V_TGT (m/s)</div>
             <NumInput value={params.MSK_V_TGT ?? 9.0} min={1} max={30} step={0.1}
-                      onCommit={v => push('MSK_V_TGT', v)}
+                      onCommit={v => setLocal('MSK_V_TGT', v)}
                       className="input val-mono w-full" />
           </div>
           <div>
             <div className="label mb-1">P 增益</div>
             <NumInput value={params.MSK_V_PI_P ?? 0.05} min={0} max={1} step={0.01}
-                      onCommit={v => push('MSK_V_PI_P', v)}
+                      onCommit={v => setLocal('MSK_V_PI_P', v)}
                       className="input val-mono w-full" />
           </div>
           <div>
             <div className="label mb-1">I 增益</div>
             <NumInput value={params.MSK_V_PI_I ?? 0.02} min={0} max={1} step={0.01}
-                      onCommit={v => push('MSK_V_PI_I', v)}
+                      onCommit={v => setLocal('MSK_V_PI_I', v)}
                       className="input val-mono w-full" />
           </div>
           <div>
             <div className="label mb-1">D 增益 (阻尼)</div>
             <NumInput value={params.MSK_V_PI_D ?? 0.0} min={0} max={1} step={0.01}
-                      onCommit={v => push('MSK_V_PI_D', v)}
+                      onCommit={v => setLocal('MSK_V_PI_D', v)}
                       className="input val-mono w-full" />
           </div>
         </div>

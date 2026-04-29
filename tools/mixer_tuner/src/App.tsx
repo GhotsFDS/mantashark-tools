@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useStore } from './store/useStore';
 import { evalCurve } from './lib/pchip';
 import { gcs, GcsMessage } from './lib/gcs';
-import { quantize } from './lib/defaults';
+import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
 import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
 import { Waves, Sliders, Grid3x3, PlayCircle, Settings, PlugZap } from 'lucide-react';
@@ -84,17 +84,20 @@ export default function App() {
   }, [liveRtl]);
 
   // ─── App-level GCS listener: 保证不管哪个 tab 打开, PARAM_VALUE 都同步到 store ───
+  const [autoSyncStatus, setAutoSyncStatus] = useState<string | null>(null);
+  const autoSyncedRef = useRef(false);  // 同 ws session 只自动 pull 一次
   useEffect(() => {
     const off = gcs.on((m: GcsMessage) => {
-      if (m.type === 'status') setGcsConnected(m.connected);
+      if (m.type === 'status') {
+        setGcsConnected(m.connected);
+        if (!m.connected) autoSyncedRef.current = false;  // 重连允许重新 pull
+      }
       else if (m.type === 'heartbeat') {
         setGcsArmed(m.armed);
-        // 连接 FC 时自动跟随真实 arming 状态 (未连接时保留 simulate 给离线预览)
         setSimulateArmed(m.armed);
       }
       else if (m.type === 'rc') setLiveRc(m.channels);
       else if (m.type === 'statustext') {
-        // 飞控也会发 "MSK gear/auto/mode/RTL ..." 切换提示, 转 toast
         if (/MSK (gear|auto|mode)\s*->/i.test(m.text) || /MSK RTL/i.test(m.text)) {
           setToast(m.text);
           setTimeout(() => setToast(null), 3000);
@@ -106,6 +109,24 @@ export default function App() {
     });
     return () => { off(); };
   }, [params, setParam]);
+
+  // ─── 连接 FC 后自动 pullAll: 第一次 heartbeat 后 1s 触发 (等 mavbridge 跟 FC 握手稳定)
+  // ──  保证切到 Tilts/FlightProfile/Params 时 store 里是真 FC 值, 不是 default ───
+  useEffect(() => {
+    if (!gcsConnected || autoSyncedRef.current) return;
+    autoSyncedRef.current = true;
+    const t = setTimeout(async () => {
+      const keys = Object.keys(DEFAULT_PARAMS).filter(k => !SYNC_SKIP_RE.test(k));
+      setAutoSyncStatus(`同步飞控参数 0/${keys.length}`);
+      const r = await gcs.pullParams(keys, (g, total) =>
+        setAutoSyncStatus(`同步飞控参数 ${g}/${total}`));
+      setAutoSyncStatus(r.timedOut
+        ? `⚠ 同步超时 ${r.got}/${keys.length}, 缺 ${r.missing.length}`
+        : `✓ 已同步 ${r.got} 个参数`);
+      setTimeout(() => setAutoSyncStatus(null), 4000);
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [gcsConnected]);
 
   const effectiveSpeed = useMemo(() => {
     if (currentGear === 1) return Math.min(currentSpeed, params.MSK_V1);
@@ -215,6 +236,12 @@ export default function App() {
               (currentPhase === 'EMERGENCY' ? 'chip-err' : '')
             }>{currentPhase}</span>
           </StatBox>
+          {/* 自动同步状态 (连 FC 后 1s 拉所有参数, 4s 自动消失) */}
+          {autoSyncStatus && (
+            <span className="val-mono text-[10px] px-2 py-1 rounded border border-accent text-accent fade-in">
+              {autoSyncStatus}
+            </span>
+          )}
           {/* 常驻 GCS 连接指示 */}
           <button
             onClick={() => {
