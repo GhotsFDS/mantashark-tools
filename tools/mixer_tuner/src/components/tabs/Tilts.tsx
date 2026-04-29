@@ -1,22 +1,55 @@
 import React from 'react';
 import { TiltPanel } from '../common/TiltPanel';
+import { NumInput } from '../common/NumInput';
 import { TILTS } from '../../lib/actuators';
 import { useStore } from '../../store/useStore';
 import { gcs } from '../../lib/gcs';
+import { DEFAULT_PARAMS } from '../../lib/defaults';
 
 export function Tilts() {
-  const { params, setParam } = useStore();
+  const { params, setParam, setTiltPreview, globalPreviewMode, setGlobalPreviewMode } = useStore();
   const cplOn = (params.TLT_CPL_EN ?? 1) >= 0.5;
   // 实时推送 helper (本地 store + 飞控参数同步)
   const pushParam = (k: string, v: number) => {
     setParam(k, v);
     if (gcs.isConnected()) gcs.setParam(k, v);
   };
+
+  // 全局预览开/关. 关闭时: 7 路 TLT_*_PRV=-1, 滑块回各路 G1 默认 (下水初始位).
+  // 用 gcs.pushParams 30ms 错峰, 防 mavbridge 拥塞.
+  const togglePreview = (on: boolean) => {
+    setGlobalPreviewMode(on);
+    if (!on) {
+      const batch: Record<string, number> = {};
+      for (const t of TILTS) {
+        const ovrKey = `TLT_${t.alias}_PRV`;
+        const g1Key  = `TLT_${t.alias}_G1`;
+        // 优先用 store 实测值, 否则用 DEFAULT_PARAMS (各路 G1 默认不一致, 不能写死 45)
+        const g1Val  = params[g1Key] ?? DEFAULT_PARAMS[g1Key] ?? 45;
+        setParam(ovrKey, -1);
+        batch[ovrKey] = -1;
+        setTiltPreview(t.id, g1Val);
+      }
+      if (gcs.isConnected()) gcs.pushParams(batch);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* 全局 */}
       <div className="card">
-        <div className="card-title">全局参数 (实时推 FC)</div>
+        <div className="flex items-center mb-2">
+          <span className="card-title mb-0 flex-1">全局参数 (实时推 FC)</span>
+          <label className="flex items-center gap-1.5 text-[11px] cursor-pointer select-none">
+            <input type="checkbox"
+                   checked={globalPreviewMode}
+                   onChange={e => togglePreview(e.target.checked)}
+                   className="accent-accent" />
+            <span className={globalPreviewMode ? 'text-accent' : 'text-fg-dim'}>
+              全局预览模式 {globalPreviewMode ? '· LIVE (拖滑块覆盖 FC)' : '(关 = 释放预览, FC 跟档位 G1/G2/G3)'}
+            </span>
+          </label>
+        </div>
         <div className="grid grid-cols-5 gap-4">
           <GlobalField label="PWM per ° (统一)" k="TLT_PWM_PER_DEG" unit="μs/°" step={0.01} pushParam={pushParam} />
           {/* S→DF 耦合 ON/OFF + K 系数 */}
@@ -66,14 +99,11 @@ function GlobalField({ label, k, unit, step, min, max, pushParam, disabled }: an
     <div>
       <div className="label mb-1">{label}</div>
       <div className="flex items-center gap-1.5">
-        <input
-          type="number" step={step}
-          min={min} max={max}
-          value={params[k]}
-          disabled={disabled}
-          onChange={e => pushParam(k, parseFloat(e.target.value) || 0)}
-          className={'input flex-1 val-mono ' + (disabled ? 'opacity-50' : '')}
-        />
+        <NumInput value={params[k] ?? 0}
+                  step={step} min={min} max={max}
+                  disabled={disabled}
+                  onCommit={v => pushParam(k, v)}
+                  className={'input flex-1 val-mono ' + (disabled ? 'opacity-50' : '')} />
         {unit && <span className="text-[10px] text-fg-dim">{unit}</span>}
       </div>
     </div>

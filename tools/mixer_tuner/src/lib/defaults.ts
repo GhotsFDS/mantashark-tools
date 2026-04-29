@@ -30,6 +30,10 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_L2_SGRP_RT: 5.0,  // Layer 2 SGRP 改平 rate (°/s, 实飞调)
   MSK_L2_RD_RT:   3.0,  // Layer 2 RDL/RDR 改平 rate (°/s, 实飞调)
   MSK_K_DRFT_RT:  0.01, // P3.7 K_drift 学习 rate (/s, 默认 0.01, 实飞调; 0=关学习)
+  // v9 P3.8 三档 base_pitch (°, ch7 切档时 Q_TRIM_PITCH ramp 目标)
+  MSK_BPCH_G1: 5,    // G1 慢滑: 浮筒承重自然
+  MSK_BPCH_G2: 11,   // G2 抬头建气垫
+  MSK_BPCH_G3: 8,    // G3 巡航: 翼面 0° AoA
 
   // ═══ TLT_ (tilt_driver, key=82) — 32+7=39 ═══
   TLT_CPL_SDF_K:   0.30,
@@ -94,6 +98,7 @@ export function paramRange(key: string) {
   if (/^MSK_KT_LIM$/.test(key))     return { min: 0.5, max: 1.0, step: 0.01 };
   if (/^MSK_L2_(SGRP|RD)_RT$/.test(key)) return { min: 0.5, max: 30, step: 0.5 };
   if (/^MSK_K_DRFT_RT$/.test(key))  return { min: 0, max: 0.1, step: 0.001 };
+  if (/^MSK_BPCH_G[123]$/.test(key)) return { min: 0, max: 20, step: 0.5 };
   if (/^TLT_.*_ZERO$/.test(key)) return { min: 500, max: 2500, step: 1 };
   if (/^TLT_.*_DIR$/.test(key))  return { min: -1, max: 1, step: 1 };  // 三态 -1/0/+1
   if (/^TLT_.*_LMIN$/.test(key)) return { min: -180, max: 0, step: 1 };

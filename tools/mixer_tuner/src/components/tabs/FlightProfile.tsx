@@ -3,6 +3,7 @@
 import React from 'react';
 import { useStore } from '../../store/useStore';
 import { gcs } from '../../lib/gcs';
+import { NumInput } from '../common/NumInput';
 
 const GEARS = ['G1', 'G2', 'G3'] as const;
 type Gear = typeof GEARS[number];
@@ -12,7 +13,7 @@ const GEAR_LABELS: Record<Gear, string> = {
   G2: '抬头建气垫 (静止/<2 m/s)',
   G3: '巡航 (≥9 m/s)',
 };
-const GEAR_BASE_PITCH: Record<Gear, number> = { G1: 5, G2: 11, G3: 8 };
+const GEAR_BPCH_KEY: Record<Gear, string> = { G1: 'MSK_BPCH_G1', G2: 'MSK_BPCH_G2', G3: 'MSK_BPCH_G3' };
 const GEAR_DESC: Record<Gear, string> = {
   G1: '浮筒承重 + KT 慢推. 油门 stick 直通基线.',
   G2: 'KS+KDF 抬头, RD 反向上吹 (>90°) 抬头, 静态建气垫. 油门直通.',
@@ -61,7 +62,10 @@ export function FlightProfile() {
               </div>
               <div className="mt-2 flex items-center gap-2 text-[11px]">
                 <span className="text-fg-dim">base_pitch</span>
-                <span className="val-mono text-accent text-[16px]">{GEAR_BASE_PITCH[g]}°</span>
+                <NumInput value={params[GEAR_BPCH_KEY[g]] ?? 0} min={0} max={20} step={0.5}
+                          onCommit={v => push(GEAR_BPCH_KEY[g], v)}
+                          className="input val-mono text-accent text-[14px] w-16 px-1.5 py-0.5" />
+                <span className="text-fg-dim text-[10px]">°</span>
               </div>
               <div className="mt-1 text-[9px] text-fg-mute leading-snug">{GEAR_DESC[g]}</div>
             </div>
@@ -95,12 +99,9 @@ export function FlightProfile() {
                   const val = params[key] ?? 0;
                   return (
                     <td key={g} className="px-1 py-1">
-                      <input
-                        type="number" min={0} max={1} step={0.01}
-                        value={val}
-                        onChange={e => push(key, Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
-                        className="input val-mono text-center w-full"
-                      />
+                      <NumInput value={val} min={0} max={1} step={0.01}
+                                onCommit={v => push(key, v)}
+                                className="input val-mono text-center w-full" />
                     </td>
                   );
                 })}
@@ -131,12 +132,9 @@ export function FlightProfile() {
                   const val = params[key] ?? 45;
                   return (
                     <td key={g} className="px-1 py-1">
-                      <input
-                        type="number" min={0} max={180} step={1}
-                        value={val}
-                        onChange={e => push(key, Math.max(0, Math.min(180, parseFloat(e.target.value) || 0)))}
-                        className="input val-mono text-center w-full"
-                      />
+                      <NumInput value={val} min={0} max={180} step={1}
+                                onCommit={v => push(key, v)}
+                                className="input val-mono text-center w-full" />
                     </td>
                   );
                 })}
@@ -158,12 +156,9 @@ export function FlightProfile() {
           <div>
             <div className="label mb-1">tilt 平滑速率 (TLT_RATE)</div>
             <div className="flex items-center gap-2">
-              <input
-                type="number" min={5} max={90} step={1}
-                value={params.TLT_RATE ?? 30}
-                onChange={e => push('TLT_RATE', Math.max(5, Math.min(90, parseFloat(e.target.value) || 30)))}
-                className="input val-mono w-24"
-              />
+              <NumInput value={params.TLT_RATE ?? 30} min={5} max={90} step={1}
+                        onCommit={v => push('TLT_RATE', v)}
+                        className="input val-mono w-24" />
               <span className="text-[10px] text-fg-dim">°/s</span>
             </div>
             <div className="text-[9px] text-fg-mute mt-1">
@@ -173,12 +168,9 @@ export function FlightProfile() {
           <div>
             <div className="label mb-1">base_pitch ramp (TRIM_RATE)</div>
             <div className="flex items-center gap-2">
-              <input
-                type="number" min={0} max={30} step={0.5}
-                value={params.MSK_TRIM_RATE ?? 3.0}
-                onChange={e => push('MSK_TRIM_RATE', Math.max(0, Math.min(30, parseFloat(e.target.value) || 3)))}
-                className="input val-mono w-24"
-              />
+              <NumInput value={params.MSK_TRIM_RATE ?? 3.0} min={0} max={30} step={0.5}
+                        onCommit={v => push('MSK_TRIM_RATE', v)}
+                        className="input val-mono w-24" />
               <span className="text-[10px] text-fg-dim">°/s</span>
             </div>
             <div className="text-[9px] text-fg-mute mt-1">
@@ -206,26 +198,23 @@ export function FlightProfile() {
           </div>
           <div>
             <div className="label mb-1">Pitch scale (P_SC)</div>
-            <input type="number" min={0} max={30} step={0.5}
-              value={params.MSK_FB_P_SC ?? 5}
-              onChange={e => push('MSK_FB_P_SC', Math.max(0, Math.min(30, parseFloat(e.target.value) || 5)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_FB_P_SC ?? 5} min={0} max={30} step={0.5}
+                      onCommit={v => push('MSK_FB_P_SC', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">SGRP+RD pitch 反馈 °/unit</div>
           </div>
           <div>
             <div className="label mb-1">Roll scale (R_SC)</div>
-            <input type="number" min={0} max={30} step={0.5}
-              value={params.MSK_FB_R_SC ?? 5}
-              onChange={e => push('MSK_FB_R_SC', Math.max(0, Math.min(30, parseFloat(e.target.value) || 5)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_FB_R_SC ?? 5} min={0} max={30} step={0.5}
+                      onCommit={v => push('MSK_FB_R_SC', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">TL1/TR1 roll 反馈 °/unit</div>
           </div>
           <div>
             <div className="label mb-1">RD V scale (V_SC)</div>
-            <input type="number" min={0} max={30} step={0.5}
-              value={params.MSK_FB_V_SC ?? 8}
-              onChange={e => push('MSK_FB_V_SC', Math.max(0, Math.min(30, parseFloat(e.target.value) || 8)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_FB_V_SC ?? 8} min={0} max={30} step={0.5}
+                      onCommit={v => push('MSK_FB_V_SC', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">G3+稳态 °/m/s err</div>
           </div>
         </div>
@@ -244,34 +233,30 @@ export function FlightProfile() {
         <div className="grid grid-cols-4 gap-3">
           <div>
             <div className="label mb-1">KT 撞限阈值 (KT_LIM)</div>
-            <input type="number" min={0.5} max={1.0} step={0.01}
-              value={params.MSK_KT_LIM ?? 1.0}
-              onChange={e => push('MSK_KT_LIM', Math.max(0.5, Math.min(1.0, parseFloat(e.target.value) || 1)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_KT_LIM ?? 1.0} min={0.5} max={1.0} step={0.01}
+                      onCommit={v => push('MSK_KT_LIM', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">Layer 1→2 转换 (迟滞 0.95×)</div>
           </div>
           <div>
             <div className="label mb-1">SGRP rate (°/s)</div>
-            <input type="number" min={0.5} max={30} step={0.5}
-              value={params.MSK_L2_SGRP_RT ?? 5.0}
-              onChange={e => push('MSK_L2_SGRP_RT', Math.max(0.5, Math.min(30, parseFloat(e.target.value) || 5)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_L2_SGRP_RT ?? 5.0} min={0.5} max={30} step={0.5}
+                      onCommit={v => push('MSK_L2_SGRP_RT', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 SGRP 改平</div>
           </div>
           <div>
             <div className="label mb-1">RD rate (°/s)</div>
-            <input type="number" min={0.5} max={30} step={0.5}
-              value={params.MSK_L2_RD_RT ?? 3.0}
-              onChange={e => push('MSK_L2_RD_RT', Math.max(0.5, Math.min(30, parseFloat(e.target.value) || 3)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_L2_RD_RT ?? 3.0} min={0.5} max={30} step={0.5}
+                      onCommit={v => push('MSK_L2_RD_RT', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 RDL/RDR 改平</div>
           </div>
           <div>
             <div className="label mb-1">K_drift rate (/s, P3.7)</div>
-            <input type="number" min={0} max={0.1} step={0.001}
-              value={params.MSK_K_DRFT_RT ?? 0.0}
-              onChange={e => push('MSK_K_DRFT_RT', Math.max(0, Math.min(0.1, parseFloat(e.target.value) || 0)))}
-              className="input val-mono w-full" />
+            <NumInput value={params.MSK_K_DRFT_RT ?? 0.0} min={0} max={0.1} step={0.001}
+                      onCommit={v => push('MSK_K_DRFT_RT', v)}
+                      className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">0=关, 0.005-0.02=学习</div>
           </div>
         </div>
@@ -290,39 +275,27 @@ export function FlightProfile() {
         <div className="grid grid-cols-4 gap-3">
           <div>
             <div className="label mb-1">目标速度 V_TGT (m/s)</div>
-            <input
-              type="number" min={1} max={30} step={0.1}
-              value={params.MSK_V_TGT ?? 9.0}
-              onChange={e => push('MSK_V_TGT', Math.max(1, Math.min(30, parseFloat(e.target.value) || 9)))}
-              className="input val-mono w-full"
-            />
+            <NumInput value={params.MSK_V_TGT ?? 9.0} min={1} max={30} step={0.1}
+                      onCommit={v => push('MSK_V_TGT', v)}
+                      className="input val-mono w-full" />
           </div>
           <div>
             <div className="label mb-1">P 增益</div>
-            <input
-              type="number" min={0} max={1} step={0.01}
-              value={params.MSK_V_PI_P ?? 0.05}
-              onChange={e => push('MSK_V_PI_P', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.05)))}
-              className="input val-mono w-full"
-            />
+            <NumInput value={params.MSK_V_PI_P ?? 0.05} min={0} max={1} step={0.01}
+                      onCommit={v => push('MSK_V_PI_P', v)}
+                      className="input val-mono w-full" />
           </div>
           <div>
             <div className="label mb-1">I 增益</div>
-            <input
-              type="number" min={0} max={1} step={0.01}
-              value={params.MSK_V_PI_I ?? 0.02}
-              onChange={e => push('MSK_V_PI_I', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0.02)))}
-              className="input val-mono w-full"
-            />
+            <NumInput value={params.MSK_V_PI_I ?? 0.02} min={0} max={1} step={0.01}
+                      onCommit={v => push('MSK_V_PI_I', v)}
+                      className="input val-mono w-full" />
           </div>
           <div>
             <div className="label mb-1">D 增益 (阻尼)</div>
-            <input
-              type="number" min={0} max={1} step={0.01}
-              value={params.MSK_V_PI_D ?? 0.0}
-              onChange={e => push('MSK_V_PI_D', Math.max(0, Math.min(1, parseFloat(e.target.value) || 0)))}
-              className="input val-mono w-full"
-            />
+            <NumInput value={params.MSK_V_PI_D ?? 0.0} min={0} max={1} step={0.01}
+                      onCommit={v => push('MSK_V_PI_D', v)}
+                      className="input val-mono w-full" />
           </div>
         </div>
         <div className="mt-2 text-[9px] text-fg-mute leading-snug">

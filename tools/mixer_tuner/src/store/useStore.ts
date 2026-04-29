@@ -19,6 +19,7 @@ interface Actions {
   setMergeLR: (v: boolean) => void;
   setTab: (t: string) => void;
   setTiltPreview: (id: TiltId, v: number) => void;
+  setGlobalPreviewMode: (v: boolean) => void;
   setPhaseConfig: (p: PhaseName, field: 'trim' | TiltId, v: number) => void;
   setAnalysisRdTilt: (v: number) => void;
   setAnalysisSGroup: (v: number) => void;
@@ -43,6 +44,7 @@ const INITIAL: AppState = {
   currentTab: 'gcs',
   // 默认全 45° (绝对物理角度 = 中立)
   tiltPreview: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 },
+  globalPreviewMode: false,                              // 默认关 (下水初始状态, 全部 G1 默认位)
   analysisRdTilt: 45,
   analysisSGroup: 45,
   analysisDfTarget: 55,                                  // 中立稍偏水平
@@ -72,6 +74,8 @@ export const useStore = create<AppState & Actions>()(
       setTab: (t) => set({ currentTab: t }),
 
       setTiltPreview: (id, v) => set(s => ({ tiltPreview: { ...s.tiltPreview, [id]: v } })),
+
+      setGlobalPreviewMode: (v) => set({ globalPreviewMode: v }),
 
       setPhaseConfig: (p, field, v) => set(s => {
         const pc = { ...s.phaseConfig };
@@ -114,10 +118,11 @@ export const useStore = create<AppState & Actions>()(
     {
       name: 'mantashark-tuner-v9',
       // Bumping version: 旧的 persisted state 会被 migrate() 处理. 改 schema 时 +1 强制清旧坏数据.
-      version: 4,
+      version: 5,
       migrate: (persisted: any, version: number) => {
         // v3 之前: selectedCurve 可能存了非法值导致崩溃 → 重置 UI 状态.
         // v4: simulateArmed 默认值改 false (旧的 true 会卡住调参 UI 显示"已 armed").
+        // v5: 加 globalPreviewMode (默认 false, 下水初始状态)
         if (!persisted || version < 3) {
           persisted = {
             ...(persisted || {}),
@@ -128,8 +133,10 @@ export const useStore = create<AppState & Actions>()(
           };
         }
         if (!persisted || version < 4) {
-          // 强制清掉旧的 simulateArmed=true, 让连接 FC 后由 heartbeat 驱动
           persisted = { ...(persisted || {}), simulateArmed: false };
+        }
+        if (!persisted || version < 5) {
+          persisted = { ...(persisted || {}), globalPreviewMode: false };
         }
         return persisted;
       },

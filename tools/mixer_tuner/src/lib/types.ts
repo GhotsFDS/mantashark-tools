@@ -43,6 +43,7 @@ export interface AppState {
   curveMode: 'k' | 'tilt' | 'joint';   // joint = K + 关联倾转曲线 (仅当前组)
   mergeLR: boolean;          // 倾转曲线: 合并左右 (DFL+DFR / TL1+TR1 / RDL+RDR)
   tiltPreview: Record<TiltId, number>;
+  globalPreviewMode: boolean;     // 全局预览总开关; 关闭时 7 路 PRV=-1 + 滑块回 G1 默认
   analysisRdTilt: number;
   analysisSGroup: number;
   analysisDfTarget: number;

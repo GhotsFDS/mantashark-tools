@@ -89,11 +89,14 @@ export class GcsClient {
   isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }
 
   // ─── 闭环拉取: 发 read, 等 PARAM_VALUE 回流, 进度回调, 静默超时 ───
+  // timeoutMs 默认动态: 8s base + 350ms/key (低速数传 SiK 57600 留余量, 60 keys ≈ 29s).
+  // 调用方传 0 则用 default, 传非 0 自定义.
   pullParams(
     keys: string[],
     onProgress?: (got: number, total: number) => void,
-    timeoutMs = 8000,
+    timeoutMs?: number,
   ): Promise<{ got: number; missing: string[]; timedOut: boolean }> {
+    const t = timeoutMs && timeoutMs > 0 ? timeoutMs : Math.max(8000, 8000 + keys.length * 350);
     return new Promise((resolve) => {
       if (!this.isConnected()) {
         resolve({ got: 0, missing: keys, timedOut: false });
@@ -115,25 +118,27 @@ export class GcsClient {
         off();
         resolve({ got, missing: [...remaining], timedOut });
       };
-      const timer = setTimeout(() => finish(true), timeoutMs);
-      // 30ms/次 节流防 ws 拥塞
-      keys.forEach((k, i) => setTimeout(() => this.readParam(k), i * 30));
+      const timer = setTimeout(() => finish(true), t);
+      // 50ms/次 节流防 ws 拥塞 + 数传链路 buffer overflow (低速 SiK 实测安全间隔)
+      keys.forEach((k, i) => setTimeout(() => this.readParam(k), i * 50));
     });
   }
 
   // ─── 闭环推送: setParam 后等 FC ack (PARAM_VALUE 回流) 或超时 ───
+  // timeoutMs 默认动态: 8s base + 350ms/key. 跟 pullParams 一致.
   pushParams(
     map: Record<string, number>,
     onProgress?: (sent: number, total: number) => void,
-    timeoutMs = 8000,
+    timeoutMs?: number,
   ): Promise<{ acked: number; missing: string[]; timedOut: boolean }> {
+    const keys = Object.keys(map);
+    const t = timeoutMs && timeoutMs > 0 ? timeoutMs : Math.max(8000, 8000 + keys.length * 350);
     return new Promise((resolve) => {
       if (!this.isConnected()) {
-        resolve({ acked: 0, missing: Object.keys(map), timedOut: false });
+        resolve({ acked: 0, missing: keys, timedOut: false });
         this.emit({ type: 'error', msg: '未连接 mavbridge.py, 推送取消' });
         return;
       }
-      const keys = Object.keys(map);
       const remaining = new Set(keys);
       let acked = 0;
       const off = this.on((m) => {
@@ -149,9 +154,9 @@ export class GcsClient {
         off();
         resolve({ acked, missing: [...remaining], timedOut });
       };
-      const timer = setTimeout(() => finish(true), timeoutMs);
+      const timer = setTimeout(() => finish(true), t);
       keys.forEach((k, i) =>
-        setTimeout(() => this.setParam(k, map[k]), i * 30)
+        setTimeout(() => this.setParam(k, map[k]), i * 50)
       );
     });
   }

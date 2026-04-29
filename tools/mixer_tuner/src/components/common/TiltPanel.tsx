@@ -3,7 +3,7 @@ import { useStore } from '../../store/useStore';
 import type { TiltConfig } from '../../lib/types';
 import { TILT_NEUTRAL_ABS_DEG } from '../../lib/actuators';
 import { gcs } from '../../lib/gcs';
-import { AlertTriangle, X, Radio } from 'lucide-react';
+import { AlertTriangle, Radio } from 'lucide-react';
 
 interface Props {
   t: TiltConfig;
@@ -11,15 +11,19 @@ interface Props {
 
 // 角度约定:
 //   显示/调试 用绝对物理角度 abs_deg (0=垂直水面, 45=中立, 90=水平水面)
-//   软限位 LMIN/LMAX 是 *偏移量* offset = abs - 45 (范围 -180..+180, |LMIN|+|LMAX|≤180°)
+//   软限位 LMIN/LMAX 是 *偏移量* offset = abs - 45, 各自范围 -180..+180.
+// 重要: 软限位是 *运行时工作限位* (工况避机身吹气 + G 限制), 不是机械限位.
+//   - 0 偏移 (= abs 45°) 是中立标准, 但不一定在限位内 (区间可以是 [+10,+30] 这种不含 0 的)
+//   - 物理标准: LMIN ≤ LMAX, 区间宽度 LMAX-LMIN ≤ 180° (单舵机最大行程)
+//   - 预检 ±10° 扫描走 PRE_SWING, 不受软限位约束
 //   ZERO/DIR/PER_DEG 是 PWM 标定. PWM = ZERO + DIR × PER_DEG × clamped_offset
 // 软限位不映射到 500-2500, 仅做 offset 截断, 输出 PWM 是真实物理值. 超限锁限位 PWM.
 export function TiltPanel({ t }: Props) {
-  const { params, tiltPreview, setParam, setTiltPreview, simulateArmed } = useStore();
+  const { params, tiltPreview, setParam, setTiltPreview, simulateArmed, globalPreviewMode } = useStore();
   const zeroKey = `TLT_${t.alias}_ZERO`;
   const dirKey  = `TLT_${t.alias}_DIR`;
-  const lminKey = `TLT_${t.alias}_LMIN`;   // 偏移量下界 (≤0 一般)
-  const lmaxKey = `TLT_${t.alias}_LMAX`;   // 偏移量上界 (≥0 一般)
+  const lminKey = `TLT_${t.alias}_LMIN`;   // 偏移量下界 (任意, LMIN ≤ LMAX)
+  const lmaxKey = `TLT_${t.alias}_LMAX`;   // 偏移量上界 (任意, 区间不一定跨 0)
   const ovrKey  = `TLT_${t.alias}_PRV`;
   const zero = params[zeroKey];
   const dir = params[dirKey];
@@ -47,19 +51,19 @@ export function TiltPanel({ t }: Props) {
     if (gcs.isConnected()) gcs.setParam(key, val);
   };
 
-  // 拖滑杆 → store + 实时推送 PRE_OVR_<alias>
+  // 拖滑杆 → store + 实时推送 TLT_*_PRV (仅当全局预览模式开 + 未 armed).
+  // 50ms 节流防 ws 拥塞 (slider drag 50+/秒).
+  const lastPushRef = React.useRef<number>(0);
   const setPreviewLive = (absDeg: number) => {
     setTiltPreview(t.id, absDeg);
-    if (!armedLock) {
+    if (!armedLock && globalPreviewMode) {
       setParam(ovrKey, absDeg);
-      gcs.setParam(ovrKey, absDeg);
+      const now = performance.now();
+      if (now - lastPushRef.current >= 50) {
+        gcs.setParam(ovrKey, absDeg);
+        lastPushRef.current = now;
+      }
     }
-  };
-
-  const exitPreview = () => {
-    setParam(ovrKey, -1);
-    gcs.setParam(ovrKey, -1);
-    setTiltPreview(t.id, TILT_NEUTRAL_ABS_DEG);
   };
 
   React.useEffect(() => {
@@ -69,25 +73,55 @@ export function TiltPanel({ t }: Props) {
     }
   }, [armedLock]);
 
-  const totalSpan = Math.abs(lminOff) + Math.abs(lmaxOff);
+  const totalSpan = lmaxOff - lminOff;             // 区间宽度 (= LMAX - LMIN, ≥0)
   const spanAtLimit = totalSpan >= 180;
 
   const [flashMin, setFlashMin] = React.useState(false);
   const [flashMax, setFlashMax] = React.useState(false);
 
-  // |LMIN| + |LMAX| ≤ 180°. LMIN ≤ 0, LMAX ≥ 0.
+  // ZERO 数字输入: local state + onBlur/Enter/箭头键 才 push, 防中间值让舵机突变
+  // isFocused ref: 用户正在编辑期间 GCS 推 PARAM_VALUE 不要覆盖 draft (race lock)
+  const zeroFocusedRef = React.useRef(false);
+  const [zeroDraft, setZeroDraft] = React.useState<string>(String(zero));
+  const [flashZero, setFlashZero] = React.useState<'ok' | 'bad' | null>(null);
+  React.useEffect(() => {
+    if (!zeroFocusedRef.current) setZeroDraft(String(zero));
+  }, [zero]);
+  const commitZero = () => {
+    const v = parseInt(zeroDraft, 10);
+    if (!isNaN(v) && v >= 500 && v <= 2500) {
+      if (v !== zero) {
+        pushParam(zeroKey, v);
+        setFlashZero('ok'); setTimeout(() => setFlashZero(null), 300);
+      }
+    } else {
+      setZeroDraft(String(zero));
+      setFlashZero('bad'); setTimeout(() => setFlashZero(null), 400);
+    }
+  };
+
+  // 软限位 = 运行时工作区间. 必须 LMIN ≤ LMAX, 区间宽度 LMAX-LMIN ≤ 180°.
+  // 区间可以不含 0 偏移 (例 [+10,+30] 表示工况禁止舵机回中立, 防吹机身).
   const handleLminChange = (raw: number) => {
-    let v = Math.max(-180, Math.min(0, raw));
-    if (Math.abs(v) + Math.abs(lmaxOff) > 180) {
-      v = -(180 - Math.abs(lmaxOff));
+    let v = Math.max(-180, Math.min(180, raw));
+    if (v > lmaxOff) {
+      v = lmaxOff;
+      setFlashMin(true); setTimeout(() => setFlashMin(false), 300);
+    }
+    if (lmaxOff - v > 180) {
+      v = lmaxOff - 180;
       setFlashMin(true); setTimeout(() => setFlashMin(false), 300);
     }
     pushParam(lminKey, v);
   };
   const handleLmaxChange = (raw: number) => {
-    let v = Math.max(0, Math.min(180, raw));
-    if (Math.abs(lminOff) + Math.abs(v) > 180) {
-      v = 180 - Math.abs(lminOff);
+    let v = Math.max(-180, Math.min(180, raw));
+    if (v < lminOff) {
+      v = lminOff;
+      setFlashMax(true); setTimeout(() => setFlashMax(false), 300);
+    }
+    if (v - lminOff > 180) {
+      v = lminOff + 180;
       setFlashMax(true); setTimeout(() => setFlashMax(false), 300);
     }
     pushParam(lmaxKey, v);
@@ -112,11 +146,20 @@ export function TiltPanel({ t }: Props) {
                  className="slider w-full" />
         </div>
         <div>
-          <div className="label mb-1">μs</div>
+          <div className="label mb-1">μs (回车/失焦/↑↓推)</div>
           <input type="number" min={500} max={2500} step={1}
-                 value={zero}
-                 onChange={e => pushParam(zeroKey, parseFloat(e.target.value) || 1500)}
-                 className="input w-full val-mono" />
+                 inputMode="numeric"
+                 value={zeroDraft}
+                 onChange={e => setZeroDraft(e.target.value)}
+                 onFocus={() => { zeroFocusedRef.current = true; }}
+                 onBlur={() => { zeroFocusedRef.current = false; commitZero(); }}
+                 onKeyDown={e => {
+                   if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                   else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') setTimeout(commitZero, 0);
+                 }}
+                 className={'input w-full val-mono transition-all ' +
+                            (flashZero === 'bad' ? 'ring-1 ring-warn rounded' :
+                             flashZero === 'ok'  ? 'ring-1 ring-accent rounded' : '')} />
         </div>
       </div>
 
@@ -140,47 +183,49 @@ export function TiltPanel({ t }: Props) {
         </div>
       </div>
 
-      {/* 软限位 (偏移角度, |LMIN|+|LMAX| ≤180°) */}
+      {/* 软限位 (运行时工作区间, LMIN ≤ LMAX, 区间宽度 ≤180°. 区间可不含 0 偏移) */}
       <div className="mt-3">
         <div className="flex items-center mb-1">
-          <span className="label flex-1">软限位 (offset, |LMIN|+|LMAX| ≤ 180°)</span>
+          <span className="label flex-1">软限位 (offset, 运行工况区间)</span>
           <span className={'val-mono text-[10px] ' + (spanAtLimit ? 'text-warn' : 'text-fg-dim')}>
-            Σ={totalSpan}°
+            Δ={totalSpan}°
           </span>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div className={'transition-all ' + (flashMin ? 'ring-1 ring-warn rounded' : '')}>
             <div className="flex items-center gap-1 mb-1">
-              <span className="label">LMIN (−)</span>
-              <span className="val-mono ml-auto text-[10px]">{lminOff}°</span>
+              <span className="label">下界 LMIN</span>
+              <span className="val-mono ml-auto text-[10px]">{lminOff>0?'+':''}{lminOff}°</span>
             </div>
-            <input type="range" min={-180} max={0} step={1}
+            <input type="range" min={-180} max={180} step={1}
                    value={lminOff}
                    onChange={e => handleLminChange(parseInt(e.target.value))}
                    className="slider w-full" />
           </div>
           <div className={'transition-all ' + (flashMax ? 'ring-1 ring-warn rounded' : '')}>
             <div className="flex items-center gap-1 mb-1">
-              <span className="label">LMAX (+)</span>
+              <span className="label">上界 LMAX</span>
               <span className="val-mono ml-auto text-[10px]">{lmaxOff>0?'+':''}{lmaxOff}°</span>
             </div>
-            <input type="range" min={0} max={180} step={1}
+            <input type="range" min={-180} max={180} step={1}
                    value={lmaxOff}
                    onChange={e => handleLmaxChange(parseInt(e.target.value))}
                    className="slider w-full" />
           </div>
         </div>
         <div className="text-[9px] text-fg-dim mt-1">
-          实际 abs 范围 [{TILT_NEUTRAL_ABS_DEG + lminOff}, {TILT_NEUTRAL_ABS_DEG + lmaxOff}]°
+          实际 abs 工作范围 [{TILT_NEUTRAL_ABS_DEG + lminOff}, {TILT_NEUTRAL_ABS_DEG + lmaxOff}]°
+          {(lminOff > 0 || lmaxOff < 0) && <span className="text-accent ml-1">· 不含中立 45°</span>}
         </div>
       </div>
 
-      {/* 预览滑杆 (主显 abs, 括号显示偏移量) */}
+      {/* 预览滑杆 (主显 abs, 括号显示偏移量). 实际机械轴 0-135°, 全局开关在 Tilts 顶部. */}
       <div className="mt-3">
         <div className="flex items-center gap-2 mb-1">
           <span className="label">预览角度</span>
-          {ovrActive && <span className="text-[9px] text-accent flex items-center gap-1">
+          {ovrActive && globalPreviewMode && <span className="text-[9px] text-accent flex items-center gap-1">
             <Radio size={9} className="animate-pulse"/>LIVE</span>}
+          {!globalPreviewMode && <span className="text-[9px] text-fg-dim">全局预览关</span>}
           {armedLock && <span className="text-[9px] text-warn">已 armed · 锁定</span>}
           {offsetClipped && <span className="text-[9px] text-warn">⚠ 撞软限</span>}
           <span className="val-mono ml-auto">
@@ -189,32 +234,26 @@ export function TiltPanel({ t }: Props) {
               ({clampedOffset >= 0 ? '+' : ''}{clampedOffset}°)
             </span>
           </span>
-          {ovrActive && (
-            <button onClick={exitPreview} title="退出预览, 回到曲线初始值"
-                    className="text-[9px] text-fg-dim hover:text-warn flex items-center gap-0.5">
-              <X size={10}/>退出
-            </button>
-          )}
         </div>
-        <input type="range" min={0} max={180} step={1}
+        <input type="range" min={0} max={135} step={1}
                value={previewAbs}
-               disabled={armedLock}
+               disabled={armedLock || !globalPreviewMode}
                onChange={e => setPreviewLive(parseInt(e.target.value))}
                className="slider w-full" />
         <div className="flex justify-between text-[9px] text-fg-dim mt-0.5">
           <span>0° 垂直</span>
           <span>45° 中立</span>
           <span>90° 水平</span>
-          <span>180°</span>
+          <span>135°</span>
         </div>
       </div>
 
       {/* 输出 PWM (真实物理值, 撞软限锁限位 PWM) */}
       <div className={
         'mt-3 flex items-center gap-2 px-3 py-2 rounded ' +
-        (hwSat ? 'bg-warn/20 text-warn' : offsetClipped ? 'bg-accent/15 text-accent' : 'bg-panel-2 text-fg')
+        ((hwSat || offsetClipped) ? 'bg-warn/20 text-warn' : 'bg-panel-2 text-fg')
       }>
-        {hwSat && <AlertTriangle size={14} />}
+        {(hwSat || offsetClipped) && <AlertTriangle size={14} />}
         <span className="label flex-1">输出 PWM</span>
         <span className="val-mono text-[14px]">{pwm}</span>
         <span className="text-[10px] opacity-70">μs</span>
@@ -226,8 +265,8 @@ export function TiltPanel({ t }: Props) {
         </div>
       )}
       {offsetClipped && !hwSat && (
-        <div className="mt-1 text-[10px] text-fg-dim">
-          ↑ 已锁在软限位边界, PWM 不再变化 (实际 offset {clampedOffset}°).
+        <div className="mt-1 text-[10px] text-warn">
+          ⚠ 拖出软限位 [{lminOff}°, +{lmaxOff}°], 已截断到 offset={clampedOffset}°. 实际 PWM 锁限位.
         </div>
       )}
     </div>
