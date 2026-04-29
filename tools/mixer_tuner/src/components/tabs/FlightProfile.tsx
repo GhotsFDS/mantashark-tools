@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../../store/useStore';
 import { gcs } from '../../lib/gcs';
 import { NumInput } from '../common/NumInput';
+import { paramRange, quantize } from '../../lib/defaults';
 import { Download, Upload } from 'lucide-react';
 
 const GEARS = ['G1', 'G2', 'G3'] as const;
@@ -84,14 +85,18 @@ export function FlightProfile() {
   const [busy, setBusy] = useState<'idle' | 'pulling' | 'pushing'>('idle');
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
-  // 计算 dirty (本地值 ≠ 最近 synced 值, 容差 1e-6 防浮点)
+  // 计算 dirty (本地值 ≠ 最近 synced 值)
+  // 容差 = quantize step / 2: 量化粒度内不算 dirty, 否则 mavlink float32 round-trip 误差会误判
   const dirtyKeys = useMemo(() => {
     const d: string[] = [];
     for (const k of FLIGHT_KEYS) {
       const cur = params[k];
       const snap = synced[k];
       if (cur == null) continue;
-      if (snap == null || Math.abs(cur - snap) > 1e-6) d.push(k);
+      const step = paramRange(k).step ?? 0.01;
+      const tol = step * 0.5;
+      // 双重量化保证比较干净 (mavlink → 7 位浮点 → 量化后比较)
+      if (snap == null || Math.abs(quantize(k, cur) - quantize(k, snap)) > tol) d.push(k);
     }
     return d;
   }, [params, synced]);
@@ -135,7 +140,8 @@ export function FlightProfile() {
     if (dirtyKeys.length === 0) { setStatusMsg('已是最新, 无需保存'); setTimeout(() => setStatusMsg(null), 2500); return; }
     setBusy('pushing');
     const map: Record<string, number> = {};
-    for (const k of dirtyKeys) map[k] = params[k];
+    // 推送前再量化一次, 防 0.30000004 这种 IEEE 噪声进数传
+    for (const k of dirtyKeys) map[k] = quantize(k, params[k]);
     setStatusMsg(`保存 0/${dirtyKeys.length}`);
     const r = await gcs.pushParams(map, (a, t) => setStatusMsg(`保存 ${a}/${t}`));
     // 推送 ack 的部分写入 synced
@@ -184,6 +190,9 @@ export function FlightProfile() {
           保存 ({dirtyKeys.length})
         </button>
       </div>
+
+      {/* 拉取/保存中禁用所有输入, 防中途改值污染 dirty 集合 / 推送一致性 */}
+      <fieldset disabled={busy !== 'idle'} className={'space-y-3 ' + (busy !== 'idle' ? 'opacity-60 pointer-events-none' : '')}>
 
       {/* 3 档摘要 */}
       <div className="card">
@@ -439,6 +448,8 @@ export function FlightProfile() {
           correction clamp ±0.3 (±30% thr_cap), G1/G2 时 PID 状态清零防污染.
         </div>
       </div>
+
+      </fieldset>
     </div>
   );
 }

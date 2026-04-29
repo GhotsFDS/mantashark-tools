@@ -29,56 +29,59 @@ export default function App() {
   const [liveRc, setLiveRc] = useState<number[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // 实时 gear/auto/mode 从 RC 推算 (用 MSK_GEAR_CH/MSK_AUTO_CH/MSK_MODE_CH 配置的通道)
-  const gearCh = Math.max(1, Math.floor(params.MSK_GEAR_CH ?? 7));
-  const autoCh = Math.max(1, Math.floor(params.MSK_AUTO_CH ?? 9));
-  const modeCh = Math.max(1, Math.floor(params.MSK_MODE_CH ?? 6));
+  // ─── v9 通道语义 (CLAUDE.md 权威):
+  //   ch7 g_mode 三档:  <1300 G1 慢滑 / 1300-1700 G2 抬头建气垫 / >1700 G3 巡航
+  //   ch6 thr_cap 三档: <1300 IDLE 0% / 1300-1700 CHECK 30% / >1700 TEST 60%
+  //   ch8 preflight 二态: >1700 + disarmed = 4 阶段地面预检
   const liveGear = liveRc ? (() => {
-    const pwm = liveRc[gearCh - 1] ?? 1500;
+    const pwm = liveRc[6] ?? 1500;  // ch7 (1-indexed) = idx 6
     return pwm < 1300 ? 1 : pwm < 1700 ? 2 : 3;
   })() : null;
-  const liveAuto = liveRc ? (liveRc[autoCh - 1] ?? 1500) > 1500 : null;
-  // 二段开关: NOGPS (≤1500) / GPS (>1500). v7 LOG164 简化版.
-  const liveMode = liveRc ? (liveRc[modeCh - 1] ?? 1500) > 1500 : null;
-  // RTL: ch12 PWM>1500 触发 (优先级最高)
-  const rtlCh = Math.max(1, Math.floor(params.MSK_RTL_CH ?? 12));
-  const liveRtl = liveRc ? (liveRc[rtlCh - 1] ?? 0) > 1500 : null;
+  const liveThrCap = liveRc ? (() => {
+    const pwm = liveRc[5] ?? 1500;  // ch6 = idx 5
+    return pwm < 1300 ? 'IDLE' : pwm < 1700 ? 'CHECK' : 'TEST';
+  })() : null;
+  // v9 P3.9: 预检触发改为 ch6 中档 (CHECK) + disarmed (跟 thr_cap 共位)
+  const livePreflight = liveRc ? (liveThrCap === 'CHECK' && gcsArmed === false) : null;
+  // ch12 二档开关 = ArduPlane GPS RTL 紧急返航 (RCx_OPTION = 4 RTL, ArduPlane 自带, 不走 lua)
+  const liveRtl = liveRc ? (liveRc[11] ?? 1500) > 1700 : null;
 
   // 切换提示 (toast)
-  const lastGear = useRef<number | null>(null);
-  const lastAuto = useRef<boolean | null>(null);
-  const lastMode = useRef<boolean | null>(null);
-  const lastRtl = useRef<boolean | null>(null);
+  const lastGear    = useRef<number | null>(null);
+  const lastThrCap  = useRef<string | null>(null);
+  const lastChk     = useRef<boolean | null>(null);
+  const lastRtl     = useRef<boolean | null>(null);
   useEffect(() => {
     if (liveGear == null) return;
     if (lastGear.current !== null && lastGear.current !== liveGear) {
-      const lbl = liveGear === 1 ? 'V1 慢速' : liveGear === 2 ? 'V2 驼峰' : '全开';
-      setToast(`档位切换 → ${liveGear} (${lbl})`);
+      const lbl = liveGear === 1 ? 'G1 慢滑' : liveGear === 2 ? 'G2 抬头建气垫' : 'G3 巡航';
+      setToast(`档位切换 → ${lbl}`);
       setTimeout(() => setToast(null), 5000);
     }
     lastGear.current = liveGear;
   }, [liveGear]);
   useEffect(() => {
-    if (liveAuto == null) return;
-    if (lastAuto.current !== null && lastAuto.current !== liveAuto) {
-      setToast(`Auto 切换 → ${liveAuto ? 'Auto (摇杆放大)' : 'Manual (线性)'}`);
+    if (liveThrCap == null) return;
+    if (lastThrCap.current !== null && lastThrCap.current !== liveThrCap) {
+      const map: Record<string,string> = { IDLE:'0% (停机)', CHECK:'30% (地检)', TEST:'60% (地测)' };
+      setToast(`油门限幅 → ${liveThrCap} (${map[liveThrCap] || ''})`);
       setTimeout(() => setToast(null), 5000);
     }
-    lastAuto.current = liveAuto;
-  }, [liveAuto]);
+    lastThrCap.current = liveThrCap;
+  }, [liveThrCap]);
   useEffect(() => {
-    if (liveMode == null) return;
-    if (lastMode.current !== null && lastMode.current !== liveMode) {
-      setToast(`模式切换 → ${liveMode ? 'GPS (真速插曲线)' : 'NOGPS (按 gear 取 K{gear-1} 固定档)'}`);
-      setTimeout(() => setToast(null), 5000);
+    if (livePreflight == null) return;
+    if (lastChk.current !== null && lastChk.current !== livePreflight) {
+      setToast(livePreflight ? '⚠ 预检激活 (ch6 中档 + disarmed)' : '预检关闭');
+      setTimeout(() => setToast(null), 3000);
     }
-    lastMode.current = liveMode;
-  }, [liveMode]);
+    lastChk.current = livePreflight;
+  }, [livePreflight]);
   useEffect(() => {
     if (liveRtl == null) return;
     if (lastRtl.current !== null && lastRtl.current !== liveRtl) {
-      setToast(liveRtl ? '⚠ RTL 触发 (KS+KT 低油门, 其他组关)' : 'RTL 解除');
-      setTimeout(() => setToast(null), 3000);
+      setToast(liveRtl ? '⚠ RTL 返航触发 (ch12 高位, ArduPlane 自动飞回 home)' : 'RTL 解除');
+      setTimeout(() => setToast(null), 4000);
     }
     lastRtl.current = liveRtl;
   }, [liveRtl]);
@@ -98,7 +101,7 @@ export default function App() {
       }
       else if (m.type === 'rc') setLiveRc(m.channels);
       else if (m.type === 'statustext') {
-        if (/MSK (gear|auto|mode)\s*->/i.test(m.text) || /MSK RTL/i.test(m.text)) {
+        if (/MSK (gear|mode|chk|thr|preflight|G[123])\b/i.test(m.text)) {
           setToast(m.text);
           setTimeout(() => setToast(null), 3000);
         }
@@ -161,31 +164,41 @@ export default function App() {
           {toast}
         </div>
       )}
-      {/* 常驻当前模式状态条 (header 下方, 一直显示当前 mode/gear/auto/rtl) */}
+      {/* 常驻当前状态条 (v9: ch7 g_mode + ch6 thr_cap + ch8 preflight) */}
       <div className="bg-panel-2 border-b border-line px-4 py-1 flex items-center gap-3 text-[11px] shrink-0">
         <span className="text-fg-dim">当前状态:</span>
         <span className="val-mono">
-          模式 <b className={liveMode === null ? 'text-fg-dim' : liveMode ? 'text-ok' : 'text-warn'}>
-            {liveMode === null ? '— (无 RC)' : liveMode ? 'GPS 真速插曲线' : 'NOGPS 固定 K{gear-1}'}
-          </b>
-        </span>
-        <span className="text-fg-dim">|</span>
-        <span className="val-mono">
-          档位 <b className="text-accent">{liveGear ?? currentGear}{liveGear == null ? ' (UI)' : ''}</b>
+          档位(ch7) <b className="text-accent">{liveGear ?? currentGear}{liveGear == null ? ' (UI)' : ''}</b>
           <span className="text-fg-dim ml-1">
-            ({(liveGear ?? currentGear) === 1 ? 'V1 慢' : (liveGear ?? currentGear) === 2 ? 'V2 驼峰' : '全开'})
+            ({(liveGear ?? currentGear) === 1 ? 'G1 慢滑' : (liveGear ?? currentGear) === 2 ? 'G2 抬头建气垫' : 'G3 巡航'})
           </span>
         </span>
         <span className="text-fg-dim">|</span>
         <span className="val-mono">
-          Auto <b className={liveAuto === null ? 'text-fg-dim' : liveAuto ? 'text-warn' : 'text-ok'}>
-            {liveAuto === null ? '—' : liveAuto ? 'AUTO 摇杆放大' : 'MANUAL 线性'}
+          油门限幅(ch6) <b className={
+            liveThrCap === null ? 'text-fg-dim'
+            : liveThrCap === 'IDLE' ? 'text-err'
+            : liveThrCap === 'CHECK' ? 'text-warn'
+            : 'text-ok'
+          }>
+            {liveThrCap ?? '— (无 RC)'}
           </b>
+          {liveThrCap && (
+            <span className="text-fg-dim ml-1">
+              ({liveThrCap === 'IDLE' ? '0% 停机' : liveThrCap === 'CHECK' ? '30% 地检' : '60% 地测'})
+            </span>
+          )}
         </span>
+        {livePreflight && (
+          <>
+            <span className="text-fg-dim">|</span>
+            <span className="val-mono text-warn animate-pulse">⚠ 预检激活 (ch6 中档 + disarmed)</span>
+          </>
+        )}
         {liveRtl && (
           <>
             <span className="text-fg-dim">|</span>
-            <span className="val-mono text-err animate-pulse">⚠ RTL ACTIVE (KS+KT 低油门)</span>
+            <span className="val-mono text-err animate-pulse">⚠ RTL ACTIVE (ch12, GPS 自动返航)</span>
           </>
         )}
       </div>
@@ -207,25 +220,27 @@ export default function App() {
               {liveGear ?? currentGear}{liveGear == null ? ' (UI)' : ''}
             </span>
           </StatBox>
-          <StatBox label="Auto">
+          <StatBox label="ThrCap">
             <span className={
               'chip text-[10px] ' +
-              (liveAuto === null ? '' : liveAuto ? 'chip-active text-warn' : 'chip-active text-ok')
-            }>
-              {liveAuto === null ? '— (无 RC)' : liveAuto ? 'AUTO' : 'MANUAL'}
+              (liveThrCap === null ? ''
+                : liveThrCap === 'IDLE' ? 'chip-active text-err'
+                : liveThrCap === 'CHECK' ? 'chip-active text-warn'
+                : 'chip-active text-ok')
+            } title={liveThrCap === null ? '无 RC ch6' : liveThrCap === 'IDLE' ? '0% 停机' : liveThrCap === 'CHECK' ? '30% 地检' : '60% 地测'}>
+              {liveThrCap ?? '— (无 RC)'}
             </span>
           </StatBox>
-          <StatBox label="Mode">
-            <span className={
-              'chip text-[10px] ' +
-              (liveMode === null ? '' : liveMode ? 'chip-active text-ok' : 'chip-active text-warn')
-            } title={liveMode === null ? '无 RC' : liveMode ? 'GPS 真速插曲线' : 'NOGPS 按 gear 取 K{gear-1} 固定档'}>
-              {liveMode === null ? '— (无 RC)' : liveMode ? 'GPS' : 'NOGPS'}
-            </span>
-          </StatBox>
+          {livePreflight && (
+            <StatBox label="预检">
+              <span className="chip chip-active text-warn text-[10px] animate-pulse" title="ch6 中档 + disarmed = 4 阶段地面预检">
+                CHK
+              </span>
+            </StatBox>
+          )}
           {liveRtl && (
             <StatBox label="RTL">
-              <span className="chip chip-err text-[10px] animate-pulse" title="RTL 返航激活: KS+KT 低油门, 其他组关">
+              <span className="chip chip-err text-[10px] animate-pulse" title="ch12 高位 = ArduPlane GPS 返航激活">
                 ACTIVE
               </span>
             </StatBox>

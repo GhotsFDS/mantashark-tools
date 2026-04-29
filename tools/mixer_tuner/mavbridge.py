@@ -378,6 +378,20 @@ class Bridge:
                 elif t == 'reboot':
                     self.mav.mav.command_long_send(self._sys, self._comp, 246, 0,
                                                     1, 0, 0, 0, 0, 0, 0)
+                elif t == 'motor_test':
+                    # MAV_CMD_DO_MOTOR_TEST = 209
+                    # 绕过 Q_M_PWM disarmed 强制 0, 用 ArduPilot 内置 motor_test, 不需 arm
+                    # p1 motor_instance (1-12), p2 throttle_type (1=PCT 固定, 不读 req.type 防字段冲突),
+                    # p3 throttle_value, p4 timeout_sec, p5 motor_count, p6 test_order, p7 0
+                    motor_idx = int(req.get('motor', 1))
+                    throttle_val = float(req.get('value', 5))  # 5% 默认怠速
+                    timeout_s = float(req.get('timeout', 2))   # 2s 默认
+                    self.mav.mav.command_long_send(self._sys, self._comp, 209, 0,
+                                                    motor_idx, 1, throttle_val, timeout_s, 0, 0, 0)
+                elif t == 'motor_test_stop':
+                    # 显式停 (timeout=0 立即结束)
+                    self.mav.mav.command_long_send(self._sys, self._comp, 209, 0,
+                                                    1, 1, 0, 0, 0, 0, 0)
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:

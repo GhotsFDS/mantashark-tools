@@ -84,6 +84,12 @@ export class GcsClient {
   arm()       { this.send({ type: 'arm' }); }
   disarm()    { this.send({ type: 'disarm' }); }
   reboot()    { this.send({ type: 'reboot' }); }
+  // ArduPilot MAV_CMD_DO_MOTOR_TEST (绕过 Q_M_PWM disarmed=0, 不需 arm 也能让 ESC 真转)
+  // motor: 1-12 (motor_instance), throttlePct: 0-100 (PCT type=1), timeoutSec: 1-10
+  motorTest(motor: number, throttlePct: number, timeoutSec: number) {
+    this.send({ type: 'motor_test', motor, value: throttlePct, timeout: timeoutSec });
+  }
+  motorTestStop() { this.send({ type: 'motor_test_stop' }); }
   ping()      { this.send({ type: 'ping' }); }
 
   isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }

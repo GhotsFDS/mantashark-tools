@@ -4,12 +4,7 @@
 import type { ParamSet } from './types';
 
 export const DEFAULT_PARAMS: ParamSet = {
-  // ═══ MSK_ (mixer, key=81) — v9 P1 旧 4 K (兼容保留, lua 不读) ═══
-  MSK_KS:  0.70,
-  MSK_KDF: 0.50,
-  MSK_KT:  0.50,
-  MSK_KRD: 0.50,
-  // ═══ MSK_ v9 P2 三档 K (12 个) ═══
+  // ═══ MSK_ v9 P2 三档 K (12 个) — 老 4 K (MSK_KS/KDF/KT/KRD) 已删, lua 不读 ═══
   MSK_KS_G1:  0.10, MSK_KDF_G1: 0.05, MSK_KT_G1: 0.18, MSK_KRD_G1: 0.05,
   MSK_KS_G2:  0.50, MSK_KDF_G2: 0.50, MSK_KT_G2: 0.50, MSK_KRD_G2: 0.50,
   MSK_KS_G3:  0.20, MSK_KDF_G3: 0.20, MSK_KT_G3: 0.85, MSK_KRD_G3: 0.20,
@@ -34,6 +29,9 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_BPCH_G1: 5,    // G1 慢滑: 浮筒承重自然
   MSK_BPCH_G2: 11,   // G2 抬头建气垫
   MSK_BPCH_G3: 8,    // G3 巡航: 翼面 0° AoA
+  // v9 P3.9 thr_cap 限幅可调 (台架静态扭矩测试用)
+  MSK_THR_CHECK: 0.30,  // ch6 中档限幅
+  MSK_THR_TEST:  0.33,  // ch6 高档限幅 (1/3 推力, 防台架失控)
 
   // ═══ TLT_ (tilt_driver, key=82) — 32+7=39 ═══
   TLT_CPL_SDF_K:   0.30,
@@ -62,11 +60,20 @@ export const DEFAULT_PARAMS: ParamSet = {
   TLT_SGRP_G1: 75, TLT_SGRP_G2: 30, TLT_SGRP_G3: 70,
   // v9 P2 平滑速率
   TLT_RATE: 30.0,
+
+  // ═══ PRE_ (preflight, key=85) — 地面预检 5 个参数 ═══
+  PRE_CH:     8,     // 预检通道 (1-16, ch8 高位 + disarmed 激活)
+  PRE_PWM:    1100,  // 怠速 PWM (1000-2000)
+  PRE_STOP:   1000,  // 停转 PWM
+  PRE_GRP_MS: 2000,  // 每子步 ms (4 阶段时序)
+  PRE_SWING:  15,    // tilt 扫描 ±° 幅度
 };
 
-export const PARAM_PREFIXES = ['MSK', 'TLT'] as const;
+export const PARAM_PREFIXES = ['MSK', 'TLT', 'PRE'] as const;
 
-// 拉取/推送时跳过的参数 (TLT_*_PRV 是 transient 预览, 不参与 SAVE/LOAD .parm)
+// 拉取/推送时跳过的参数:
+//   TLT_*_PRV (7) — 实时预览, 重启 lua 重置 -1, 跨会话不持久化
+//   (老 4 K MSK_KS/KDF/KT/KRD 已从 DEFAULT_PARAMS 删除)
 export const SYNC_SKIP_RE = /^TLT_.*_PRV$/;
 
 // ArduPilot PARAM_VALUE 是 float32 → JS double 转换会出 4.000000095... 之类浮点噪声.
@@ -75,7 +82,8 @@ export function quantize(key: string, value: number): number {
   if (!Number.isFinite(value)) return value;
   const step = paramRange(key).step ?? 0.01;
   if (step <= 0) return value;
-  const decimals = Math.max(0, Math.min(8, -Math.floor(Math.log10(step) - 1e-9)));
+  // ceil(-log10(step)) 避免整数边界 bug: log10(0.01)=-2 精确, ceil(2)=2 ✓
+  const decimals = Math.max(0, Math.min(8, Math.ceil(-Math.log10(step))));
   return Number((Math.round(value / step) * step).toFixed(decimals));
 }
 
@@ -99,6 +107,7 @@ export function paramRange(key: string) {
   if (/^MSK_L2_(SGRP|RD)_RT$/.test(key)) return { min: 0.5, max: 30, step: 0.5 };
   if (/^MSK_K_DRFT_RT$/.test(key))  return { min: 0, max: 0.1, step: 0.001 };
   if (/^MSK_BPCH_G[123]$/.test(key)) return { min: 0, max: 20, step: 0.5 };
+  if (/^MSK_THR_(CHECK|TEST)$/.test(key)) return { min: 0, max: 1, step: 0.01 };
   if (/^TLT_.*_ZERO$/.test(key)) return { min: 500, max: 2500, step: 1 };
   if (/^TLT_.*_DIR$/.test(key))  return { min: -1, max: 1, step: 1 };  // 三态 -1/0/+1
   if (/^TLT_.*_LMIN$/.test(key)) return { min: -180, max: 0, step: 1 };
@@ -106,42 +115,94 @@ export function paramRange(key: string) {
   if (/^TLT_.*_PRV$/.test(key))  return { min: -1, max: 180, step: 1 };
   if (/^TLT_.*_G[123]$/.test(key)) return { min: 0, max: 180, step: 1 };
   if (/^TLT_RATE$/.test(key))      return { min: 5, max: 90, step: 1 };
+  // ═ PRE_ 地面预检 5 个 ═
+  if (/^PRE_CH$/.test(key))      return { min: 1, max: 16, step: 1 };       // RC 通道
+  if (/^PRE_PWM$/.test(key))     return { min: 1000, max: 2000, step: 1 };  // 怠速 PWM
+  if (/^PRE_STOP$/.test(key))    return { min: 900, max: 1500, step: 1 };
+  if (/^PRE_GRP_MS$/.test(key))  return { min: 500, max: 10000, step: 100 };
+  if (/^PRE_SWING$/.test(key))   return { min: 5, max: 30, step: 1 };
   return { step: 0.01 };
 }
 
-// ═══ 参数中文说明 ═══
+// ═══ 参数中文说明 (固定 + pattern fallback, 覆盖所有 lua 注册参数) ═══
+const TILT_NAME: Record<string, string> = {
+  DFL: 'DFL 左前下吹', DFR: 'DFR 右前下吹',
+  TL1: 'TL1 左 T1',    TR1: 'TR1 右 T1',
+  RDL: 'RDL 左后斜',   RDR: 'RDR 右后斜',
+  SGRP:'S 组中央桁架',
+};
+const GEAR_NAME: Record<string, string> = {
+  G1: '档1 慢滑',
+  G2: '档2 抬头建气垫',
+  G3: '档3 巡航',
+};
+
 export const PARAM_LABELS: Record<string, string> = {
-  MSK_KS:  'S 斜吹组 油门系数 (0..1)',
-  MSK_KDF: 'DF 前下吹组 油门系数 (0..1)',
-  MSK_KT:  'T 后推组 油门系数 (0..1)',
-  MSK_KRD: 'RD 后斜吹组 油门系数 (0..1)',
-
+  // ═ MSK G3 PID 速度环 (4) ═
+  MSK_V_TGT:  'G3 目标空速 m/s (lua 自动维持)',
+  MSK_V_PI_P: 'G3 PID P 增益 (m/s 误差→油门)',
+  MSK_V_PI_I: 'G3 PID I 增益 (积分)',
+  MSK_V_PI_D: 'G3 PID D 增益 (阻尼, 0=关, 振荡时 0.05-0.1)',
+  // ═ MSK ATC FB tilt 反馈 (4) ═
+  MSK_FB_EN:   'tilt ATC 反馈 总开关 (0=关 1=开)',
+  MSK_FB_P_SC: 'pitch ATC 反馈 scale (°/unit, 给 SGRP+RD)',
+  MSK_FB_R_SC: 'roll ATC 反馈 scale (°/unit, 给 TL1/TR1)',
+  MSK_FB_V_SC: 'RD V 反馈 scale (°/m/s err, G3 助推)',
+  // ═ MSK base_pitch ramp (1) ═
+  MSK_TRIM_RATE: 'base_pitch 切档过渡速率 °/s (0=阶跃)',
+  // ═ MSK 三层级加速 (4) ═
+  MSK_KT_LIM:     'KT 撞限阈值 (Layer1→2 转换, 迟滞 0.95×)',
+  MSK_L2_SGRP_RT: 'Layer2 SGRP 改平 rate °/s',
+  MSK_L2_RD_RT:   'Layer2 RDL/RDR 改平 rate °/s',
+  MSK_K_DRFT_RT:  'K_drift 学习 rate /s (0=关, 0.005-0.02 学习)',
+  // ═ MSK base_pitch 三档 (3) ═
+  MSK_BPCH_G1: '档1 base_pitch ° (慢滑, 浮筒承重自然)',
+  MSK_BPCH_G2: '档2 base_pitch ° (抬头建气垫)',
+  MSK_BPCH_G3: '档3 base_pitch ° (巡航 翼面 0° AoA)',
+  // ═ MSK thr_cap 限幅可调 (台架静态扭矩测试) ═
+  MSK_THR_CHECK: 'ch6 中档 thr_cap 限幅 (默认 0.30 = 30%)',
+  MSK_THR_TEST:  'ch6 高档 thr_cap 限幅 (默认 0.33 = 1/3 推力, 台架静态测试用)',
+  // ═ TLT 全局 (4) ═
   TLT_CPL_SDF_K:    'S→DF 软解耦补偿系数 (0..1)',
-  TLT_CPL_EN:       'S→DF 软解耦总开关 (0=关 不补偿, 1=开 反向补偿默认)',
-  TLT_PWM_PER_DEG:  '舵机角度→PWM 斜率 (μs/°), 90° 舵 ≈11.11',
-
-  TLT_DFL_ZERO: 'DFL 中立 PWM (abs=45° 时输出)', TLT_DFL_DIR: 'DFL 方向 (+1/0/−1, 0=锁定永远 ZERO)',
-  TLT_DFR_ZERO: 'DFR 中立 PWM',                  TLT_DFR_DIR: 'DFR 方向 (+1/0/−1)',
-  TLT_TL1_ZERO: 'TL1 中立 PWM',                  TLT_TL1_DIR: 'TL1 方向 (+1/0/−1)',
-  TLT_TR1_ZERO: 'TR1 中立 PWM',                  TLT_TR1_DIR: 'TR1 方向 (+1/0/−1)',
-  TLT_RDL_ZERO: 'RDL 中立 PWM',                  TLT_RDL_DIR: 'RDL 方向 (+1/0/−1)',
-  TLT_RDR_ZERO: 'RDR 中立 PWM',                  TLT_RDR_DIR: 'RDR 方向 (+1/0/−1)',
-  TLT_SGRP_ZERO:'S 组中立 PWM',                  TLT_SGRP_DIR:'S 组方向 (+1/0/−1)',
-
-  TLT_DFL_LMIN: 'DFL 软限位 offset 下界 (°)',   TLT_DFL_LMAX: 'DFL 软限位 offset 上界 (°)',
-  TLT_DFR_LMIN: 'DFR 软限位 offset 下界',       TLT_DFR_LMAX: 'DFR 软限位 offset 上界',
-  TLT_TL1_LMIN: 'TL1 软限位 offset 下界',       TLT_TL1_LMAX: 'TL1 软限位 offset 上界',
-  TLT_TR1_LMIN: 'TR1 软限位 offset 下界',       TLT_TR1_LMAX: 'TR1 软限位 offset 上界',
-  TLT_RDL_LMIN: 'RDL 软限位 offset 下界',       TLT_RDL_LMAX: 'RDL 软限位 offset 上界',
-  TLT_RDR_LMIN: 'RDR 软限位 offset 下界',       TLT_RDR_LMAX: 'RDR 软限位 offset 上界',
-  TLT_SGRP_LMIN:'S 组软限位 offset 下界',       TLT_SGRP_LMAX:'S 组软限位 offset 上界',
-
-  TLT_DFL_PRV:  'DFL 实时预览 abs° (−1=不覆盖)', TLT_DFR_PRV:  'DFR 预览覆盖',
-  TLT_TL1_PRV:  'TL1 预览覆盖',                   TLT_TR1_PRV:  'TR1 预览覆盖',
-  TLT_RDL_PRV:  'RDL 预览覆盖',                   TLT_RDR_PRV:  'RDR 预览覆盖',
-  TLT_SGRP_PRV: 'S 组预览覆盖',
+  TLT_CPL_EN:       'S→DF 软解耦总开关 (0=关 1=开默认)',
+  TLT_PWM_PER_DEG:  '舵机 °→PWM 斜率 μs/°, 90° 舵 ≈11.11',
+  TLT_RATE:         'tilt 平滑速率 °/s (切档过渡)',
 };
 
 export function paramLabel(key: string): string | undefined {
-  return PARAM_LABELS[key];
+  if (PARAM_LABELS[key]) return PARAM_LABELS[key];
+
+  // ═ MSK G1/G2/G3 三档 K (12) ═
+  let m = key.match(/^MSK_(KS|KDF|KT|KRD)_(G[123])$/);
+  if (m) {
+    const grp: Record<string,string> = { KS:'S 斜吹', KDF:'DF 前下吹', KT:'T 后推', KRD:'RD 后斜' };
+    return `${GEAR_NAME[m[2]]} · ${grp[m[1]]}组 油门系数 (0..1)`;
+  }
+
+  // ═ TLT_<id>_(ZERO|DIR|LMIN|LMAX|PRV) (35) ═
+  m = key.match(/^TLT_(DFL|DFR|TL1|TR1|RDL|RDR|SGRP)_(ZERO|DIR|LMIN|LMAX|PRV)$/);
+  if (m) {
+    const name = TILT_NAME[m[1]] ?? m[1];
+    const fld: Record<string,string> = {
+      ZERO: '中立 PWM (abs=45° 时输出)',
+      DIR:  '方向 (+1/0/−1, 0=锁定永远 ZERO)',
+      LMIN: '软限位 offset 下界 °',
+      LMAX: '软限位 offset 上界 °',
+      PRV:  '实时预览 abs° (−1=不覆盖, 拉滑杆覆盖)',
+    };
+    return `${name} ${fld[m[2]]}`;
+  }
+
+  // ═ TLT_<id>_G1/G2/G3 (21) ═
+  m = key.match(/^TLT_(DFL|DFR|TL1|TR1|RDL|RDR|SGRP)_(G[123])$/);
+  if (m) return `${GEAR_NAME[m[2]]} · ${TILT_NAME[m[1]] ?? m[1]} 倾转 abs°`;
+
+  // ═ PRE_ 地面预检 (5) ═
+  if (key === 'PRE_CH')     return '预检激活通道 (默认 ch8 高位 + disarmed)';
+  if (key === 'PRE_PWM')    return '预检怠速 PWM (默认 1100, 1000-2000)';
+  if (key === 'PRE_STOP')   return '预检停转 PWM (默认 1000)';
+  if (key === 'PRE_GRP_MS') return '预检每子步时长 ms (默认 2000)';
+  if (key === 'PRE_SWING')  return '预检 tilt 扫描 ±° 幅度 (默认 15)';
+
+  return undefined;
 }

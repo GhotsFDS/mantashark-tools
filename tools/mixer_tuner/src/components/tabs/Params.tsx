@@ -1,18 +1,29 @@
-import React, { useRef, useState, useEffect } from 'react';
+// 参数 tab — 仿 FlightProfile 全局拉取/保存 + dirty 计数 + fieldset 禁用
+// 输入框只改本地 store, 显式按"保存"才下发 FC.
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
 import { exportParm, importParm, exportPhaseLua, downloadText } from '../../lib/parmIO';
-import { PARAM_PREFIXES, paramRange, paramLabel, SYNC_SKIP_RE, quantize } from '../../lib/defaults';
+import { PARAM_PREFIXES, paramRange, paramLabel, SYNC_SKIP_RE, quantize, DEFAULT_PARAMS } from '../../lib/defaults';
 import { gcs } from '../../lib/gcs';
 import { Upload, Download, FileText, RotateCcw, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react';
 
-type SyncState = null | { mode:'pull'|'push'; prefix:string; got:number; total:number; msg?:string };
+// 所有参与同步的 key (跟 App-level autoSync / GCS pullAll 同范围)
+const SYNC_KEYS = Object.keys(DEFAULT_PARAMS).filter(k => !SYNC_SKIP_RE.test(k));
 
 export function Params() {
-  const { params, setParams, phaseConfig, resetDefaults } = useStore();
+  const { params, setParams, setParam, phaseConfig, resetDefaults } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
   const [log, setLog] = useState<string | null>(null);
-  const [syncBusy, setSyncBusy] = useState<SyncState>(null);
   const [gcsConnected, setGcsConnected] = useState(gcs.isConnected());
+
+  // 同步状态 (跟 FlightProfile 同模式)
+  const [synced, setSynced] = useState<Record<string, number>>(() => {
+    const s: Record<string, number> = {};
+    for (const k of SYNC_KEYS) if (k in params) s[k] = params[k];
+    return s;
+  });
+  const [busy, setBusy] = useState<'idle' | 'pulling' | 'pushing'>('idle');
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const off = gcs.on(m => { if (m.type === 'status') setGcsConnected(m.connected); });
@@ -20,9 +31,78 @@ export function Params() {
     return () => { off(); };
   }, []);
 
+  // 连 FC 后 1.5s (等 App-level autoSync 落 store) 重置 synced 快照让 dirty=0
+  useEffect(() => {
+    if (!gcs.isConnected()) return;
+    const t = setTimeout(() => {
+      const fresh = useStore.getState().params;
+      const s: Record<string, number> = {};
+      for (const k of SYNC_KEYS) if (k in fresh) s[k] = fresh[k];
+      setSynced(s);
+    }, 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // dirty 计数 (容差 = step/2, 防 mavlink float32 round-trip 误判)
+  const dirtyKeys = useMemo(() => {
+    const d: string[] = [];
+    for (const k of SYNC_KEYS) {
+      const cur = params[k];
+      const snap = synced[k];
+      if (cur == null) continue;
+      const step = paramRange(k).step ?? 0.01;
+      const tol = step * 0.5;
+      if (snap == null || Math.abs(quantize(k, cur) - quantize(k, snap)) > tol) d.push(k);
+    }
+    return d;
+  }, [params, synced]);
+
+  const onPull = async () => {
+    if (busy !== 'idle') return;
+    if (!gcsConnected) { setStatusMsg('⚠ 未连接 FC'); setTimeout(() => setStatusMsg(null), 3000); return; }
+    setBusy('pulling');
+    setStatusMsg(`拉取 0/${SYNC_KEYS.length}`);
+    const r = await gcs.pullParams(SYNC_KEYS, (g, t) => setStatusMsg(`拉取 ${g}/${t}`));
+    setTimeout(() => {
+      const fresh = useStore.getState().params;
+      const s: Record<string, number> = {};
+      for (const k of SYNC_KEYS) if (k in fresh) s[k] = fresh[k];
+      setSynced(s);
+    }, 100);
+    setStatusMsg(r.timedOut
+      ? `⚠ 拉取超时 ${r.got}/${SYNC_KEYS.length}, 缺 ${r.missing.length}`
+      : `✓ 已拉取 ${r.got} 个参数`);
+    setBusy('idle');
+    setTimeout(() => setStatusMsg(null), 4000);
+  };
+
+  const onSave = async () => {
+    if (busy !== 'idle') return;
+    if (!gcsConnected) { setStatusMsg('⚠ 未连接 FC'); setTimeout(() => setStatusMsg(null), 3000); return; }
+    if (dirtyKeys.length === 0) { setStatusMsg('已是最新, 无需保存'); setTimeout(() => setStatusMsg(null), 2500); return; }
+    setBusy('pushing');
+    const map: Record<string, number> = {};
+    for (const k of dirtyKeys) map[k] = quantize(k, params[k]);
+    setStatusMsg(`保存 0/${dirtyKeys.length}`);
+    const r = await gcs.pushParams(map, (a, t) => setStatusMsg(`保存 ${a}/${t}`));
+    setSynced(prev => {
+      const next = { ...prev };
+      for (const k of dirtyKeys) {
+        if (!r.missing.includes(k)) next[k] = params[k];
+      }
+      return next;
+    });
+    setStatusMsg(r.timedOut
+      ? `⚠ 保存超时 ${r.acked}/${dirtyKeys.length}, 缺 ${r.missing.length}`
+      : `✓ 已保存 ${r.acked} 个参数`);
+    setBusy('idle');
+    setTimeout(() => setStatusMsg(null), 4000);
+  };
+
   const doExport = () => {
-    downloadText('mantashark_v8.parm', exportParm(params));
-    setLog('已导出 mantashark_v8.parm');
+    downloadText('mantashark_v9.parm', exportParm(params));
+    setLog('已导出 mantashark_v9.parm');
   };
   const doImport = () => fileRef.current?.click();
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -45,48 +125,42 @@ export function Params() {
     setLog('已重置为默认');
   };
 
-  // 拉取整组
-  const pullPrefix = async (pfx: string) => {
-    if (syncBusy) return;
-    if (!gcsConnected) {
-      setSyncBusy({ mode:'pull', prefix:pfx, got:0, total:0, msg:'❌ 未连接 FC, 先去 GCS tab 连接' });
-      setTimeout(() => setSyncBusy(null), 2500);
-      return;
-    }
-    const keys = Object.keys(params).filter(k => k.startsWith(pfx + '_') && !SYNC_SKIP_RE.test(k));
-    setSyncBusy({ mode:'pull', prefix:pfx, got:0, total:keys.length });
-    const r = await gcs.pullParams(keys, (g, t) => setSyncBusy({ mode:'pull', prefix:pfx, got:g, total:t }));
-    setSyncBusy({ mode:'pull', prefix:pfx, got:r.got, total:keys.length,
-      msg: r.timedOut ? `⚠ 超时, 收到 ${r.got}/${keys.length}, 缺 ${r.missing.length}` : `✓ ${pfx}_ 已拉取 ${r.got}` });
-    setTimeout(() => setSyncBusy(null), 3000);
-  };
-  const pushPrefix = async (pfx: string) => {
-    if (syncBusy) return;
-    if (!gcsConnected) {
-      setSyncBusy({ mode:'push', prefix:pfx, got:0, total:0, msg:'❌ 未连接 FC, 先去 GCS tab 连接' });
-      setTimeout(() => setSyncBusy(null), 2500);
-      return;
-    }
-    const keys = Object.keys(params).filter(k => k.startsWith(pfx + '_') && !SYNC_SKIP_RE.test(k));
-    const map: Record<string, number> = {};
-    keys.forEach(k => map[k] = params[k]);
-    setSyncBusy({ mode:'push', prefix:pfx, got:0, total:keys.length });
-    const r = await gcs.pushParams(map, (s, t) => setSyncBusy({ mode:'push', prefix:pfx, got:s, total:t }));
-    setSyncBusy({ mode:'push', prefix:pfx, got:r.acked, total:keys.length,
-      msg: r.timedOut ? `⚠ 超时, ack ${r.acked}/${keys.length}, 缺 ${r.missing.length}` : `✓ ${pfx}_ 已保存 ${r.acked}` });
-    setTimeout(() => setSyncBusy(null), 3000);
-  };
-
-  const groupsCount = PARAM_PREFIXES.reduce((acc, p) => {
-    acc[p] = Object.keys(params).filter(k => k.startsWith(p + '_')).length;
-    return acc;
-  }, {} as Record<string, number>);
-
   return (
     <div className="space-y-3">
+      {/* 全局 Pull/Save toolbar (跟 FlightProfile 同模式) */}
+      <div className="card flex items-center gap-3 py-2">
+        <span className="card-title mb-0 flex-1">参数同步 (全部 {SYNC_KEYS.length} 个)</span>
+        <span className={
+          'val-mono text-[11px] ' +
+          (dirtyKeys.length > 0 ? 'text-warn' : 'text-fg-dim')
+        }>
+          {dirtyKeys.length > 0 ? `未保存 ${dirtyKeys.length} 项` : '与 FC 一致'}
+        </span>
+        {statusMsg && <span className="val-mono text-[11px] text-accent">{statusMsg}</span>}
+        <button
+          onClick={onPull}
+          disabled={busy !== 'idle' || !gcsConnected}
+          className="btn flex items-center gap-1.5 disabled:opacity-50"
+          title={gcsConnected ? `从飞控读取 ${SYNC_KEYS.length} 个参数, 覆盖本地 (放弃未保存修改)` : '先连接 FC'}
+        >
+          <Download size={12} />
+          拉取 ({SYNC_KEYS.length})
+        </button>
+        <button
+          onClick={onSave}
+          disabled={busy !== 'idle' || dirtyKeys.length === 0 || !gcsConnected}
+          className={'btn flex items-center gap-1.5 disabled:opacity-50 ' + (dirtyKeys.length > 0 ? 'btn-primary' : '')}
+          title={gcsConnected ? '把本地修改下发到飞控 (仅推送已修改项)' : '先连接 FC'}
+        >
+          <Upload size={12} />
+          保存 ({dirtyKeys.length})
+        </button>
+      </div>
+
+      {/* 文件导入/导出工具栏 */}
       <div className="card">
         <div className="card-title flex items-center gap-2">
-          <span>导入 / 导出</span>
+          <span>文件 / 重置</span>
           {!gcsConnected && (
             <span className="chip text-[9px] text-warn ml-auto">未连接 FC · 拉取/保存按钮禁用</span>
           )}
@@ -109,94 +183,48 @@ export function Params() {
         {log && <div className="mt-2 text-[10px] text-ok">✓ {log}</div>}
       </div>
 
-      <div className="grid grid-cols-4 gap-3 text-center">
-        {PARAM_PREFIXES.map(p => (
-          <div key={p} className="card">
-            <div className="text-[10px] text-fg-mute">{p}_ 参数</div>
-            <div className="val-mono text-[18px] text-accent">{groupsCount[p]}</div>
-            <div className="text-[9px] text-fg-dim">{
-              p === 'MSK' ? 'mixer K 曲线 + V 断点' :
-              p === 'TLT' ? 'tilt_driver 舵机标定' :
-              p === 'GRD' ? 'guard 姿态' :
-              p === 'PRE' ? 'preflight 预检' :
-              p === 'MGEO' ? '电机几何系数' :
-              p === 'TLTC' ? '倾转曲线' :
-              p === 'LAY'  ? '布局位置 (UI 持久化)' : ''
-            }</div>
-          </div>
-        ))}
-      </div>
+      {/* 拉取/保存中禁用所有输入 */}
+      <fieldset disabled={busy !== 'idle'} className={'space-y-3 ' + (busy !== 'idle' ? 'opacity-60 pointer-events-none' : '')}>
 
+      {/* 三组分组展示 (无独立按钮, 只是视觉分组 + 中文说明) */}
       {PARAM_PREFIXES.map(pfx => (
-        <ParamTable
-          key={pfx} prefix={pfx}
-          pullPrefix={pullPrefix} pushPrefix={pushPrefix}
-          syncBusy={syncBusy} gcsConnected={gcsConnected}
-        />
+        <ParamTable key={pfx} prefix={pfx} dirtyKeys={dirtyKeys} setParam={setParam} />
       ))}
+
+      </fieldset>
     </div>
   );
 }
 
-interface ParamTableProps {
-  prefix: string;
-  pullPrefix: (p: string) => void;
-  pushPrefix: (p: string) => void;
-  syncBusy: SyncState;
-  gcsConnected: boolean;
-}
-
-function ParamTable({ prefix, pullPrefix, pushPrefix, syncBusy, gcsConnected }: ParamTableProps) {
-  const { params, setParam } = useStore();
-  const keys = Object.keys(params).filter(k => k.startsWith(prefix + '_')).sort();
-  if (keys.length === 0) return null;
-
-  const myBusy = syncBusy && syncBusy.prefix === prefix;
-  const otherBusy = syncBusy && syncBusy.prefix !== prefix;
+function ParamTable({ prefix, dirtyKeys, setParam }: { prefix: string; dirtyKeys: string[]; setParam: (k: string, v: number) => void }) {
+  const { params } = useStore();
+  // 只显示参与同步的 key
+  const syncKeys = Object.keys(params)
+    .filter(k => k.startsWith(prefix + '_') && !SYNC_SKIP_RE.test(k))
+    .sort();
+  if (syncKeys.length === 0) return null;
+  const myDirty = dirtyKeys.filter(k => k.startsWith(prefix + '_')).length;
 
   return (
     <div className="card">
-      <div className="flex items-center mb-2 gap-2">
-        <div className="card-title mb-0 flex-1">{prefix}_ <span className="text-[10px] text-fg-dim font-normal">({keys.length})</span></div>
-        {myBusy && !myBusy.msg && (
-          <span className="text-[10px] text-accent val-mono">
-            {myBusy.mode === 'pull' ? '⇣ 拉取中' : '⇡ 保存中'} {myBusy.got}/{myBusy.total}
-          </span>
+      <div className="card-title flex items-center gap-2 mb-2">
+        <span>{prefix}_ <span className="text-[10px] text-fg-dim font-normal">({syncKeys.length})</span></span>
+        {myDirty > 0 && (
+          <span className="chip text-[10px] text-warn">未保存 {myDirty}</span>
         )}
-        {myBusy?.msg && (
-          <span className={'text-[10px] val-mono ' + (myBusy.msg.startsWith('✓') ? 'text-ok' : 'text-warn')}>
-            {myBusy.msg}
-          </span>
-        )}
-        <button className="btn text-[10px] py-0.5 px-2"
-                disabled={!gcsConnected || !!syncBusy}
-                onClick={() => pullPrefix(prefix)}
-                title={gcsConnected ? `从 FC 拉取 ${prefix}_` : '先去 GCS tab 连接 FC'}>
-          <ArrowDownToLine size={11} className="inline mr-0.5"/>
-          {myBusy?.mode === 'pull' && !myBusy.msg ? '拉取中…' : (otherBusy ? '请稍等' : '拉取')}
-        </button>
-        <button className="btn btn-primary text-[10px] py-0.5 px-2"
-                disabled={!gcsConnected || !!syncBusy}
-                onClick={() => pushPrefix(prefix)}
-                title={gcsConnected ? `推送 ${prefix}_ 到 FC` : '先去 GCS tab 连接 FC'}>
-          <ArrowUpFromLine size={11} className="inline mr-0.5"/>
-          {myBusy?.mode === 'push' && !myBusy.msg ? '保存中…' : (otherBusy ? '请稍等' : '保存到 FC')}
-        </button>
       </div>
-
-      {/* 行布局: [参数名] [中文说明 truncate] [输入框] */}
       <div className="grid grid-cols-2 gap-x-6 gap-y-1">
-        {keys.map(k => {
+        {syncKeys.map(k => {
           const r = paramRange(k);
           const desc = paramLabel(k);
+          const isDirty = dirtyKeys.includes(k);
           return (
             <div key={k} className="flex items-center gap-2 min-w-0">
-              <span className="label val-mono w-32 shrink-0 truncate" title={k}>{k}</span>
+              <span className={'label val-mono w-32 shrink-0 truncate ' + (isDirty ? 'text-warn' : '')} title={k}>
+                {isDirty && '● '}{k}
+              </span>
               {desc ? (
-                <span
-                  className="text-[10px] text-fg-mute truncate flex-1 min-w-0"
-                  title={desc}
-                >{desc}</span>
+                <span className="text-[10px] text-fg-mute truncate flex-1 min-w-0" title={desc}>{desc}</span>
               ) : (
                 <span className="flex-1 min-w-0" />
               )}
@@ -205,7 +233,7 @@ function ParamTable({ prefix, pullPrefix, pushPrefix, syncBusy, gcsConnected }: 
                 min={r.min} max={r.max} step={r.step}
                 value={quantize(k, params[k] ?? 0)}
                 onChange={e => setParam(k, quantize(k, parseFloat(e.target.value) || 0))}
-                className="input val-mono w-20 text-right text-[10px] shrink-0"
+                className={'input val-mono w-20 text-right text-[10px] shrink-0 ' + (isDirty ? 'ring-1 ring-warn' : '')}
               />
             </div>
           );

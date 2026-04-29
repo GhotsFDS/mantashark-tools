@@ -59,15 +59,33 @@ if [ ! -f "$HTML" ]; then
     fi
 fi
 
-# 端口占用检查
+# 端口占用检查 (mavbridge ws 8765 + 静态 server 5174)
 if ss -ltn 2>/dev/null | grep -q ':8765 '; then
     echo "[launcher] ⚠ 端口 8765 已被占用 (mavbridge 已在跑?)"
     echo "    pkill -f mavbridge.py   关掉后重试"
     exit 1
 fi
+HTTP_PORT=5174
+while ss -ltn 2>/dev/null | grep -q ":$HTTP_PORT "; do
+    HTTP_PORT=$((HTTP_PORT + 1))
+done
 
-# 浏览器先开 (mavbridge 起来后 Tuner 自动连)
-URL="file://$(pwd)/$HTML"
+# 起静态 http server (服务 dist/) — 替代 file:// 协议
+# 1) file:// 浏览器硬缓存, 即使 dist 重 build 用户也看老版本
+# 2) http server 配 cache-busting query 强制每次 launch 拿新文件
+echo "[launcher] 起静态服务 http://127.0.0.1:$HTTP_PORT/ (服务 dist/)"
+"$PY" -m http.server "$HTTP_PORT" --directory dist --bind 127.0.0.1 >/dev/null 2>&1 &
+HTTP_PID=$!
+trap 'cleanup_all' EXIT
+cleanup_all() {
+    [ -n "${HTTP_PID:-}" ] && kill "$HTTP_PID" 2>/dev/null || true
+    [ -n "${BRIDGE_PID:-}" ] && kill "$BRIDGE_PID" 2>/dev/null || true
+    pause_exit
+}
+sleep 0.5
+
+# 浏览器先开. URL 加时间戳 ?v=ms 防缓存 (浏览器把 query 当新资源)
+URL="http://127.0.0.1:$HTTP_PORT/?v=$(date +%s)"
 echo "[launcher] 打开 $URL"
 if command -v xdg-open >/dev/null; then xdg-open "$URL" >/dev/null 2>&1 &
 elif command -v firefox  >/dev/null; then firefox "$URL" >/dev/null 2>&1 &

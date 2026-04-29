@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { gcs, GcsMessage } from '../../lib/gcs';
 import { useStore } from '../../store/useStore';
 import { Wifi, WifiOff, PlugZap, Upload, Download, Lock, Unlock, RefreshCcw, Terminal, TrendingUp } from 'lucide-react';
-import { DEFAULT_PARAMS } from '../../lib/defaults';
+import { DEFAULT_PARAMS, SYNC_SKIP_RE } from '../../lib/defaults';
 import { evalCurve } from '../../lib/pchip';
 import { GROUP_COLORS, GROUP_LABELS, MOTORS, SINGLE_MOTOR_MAX_N, VEHICLE_WEIGHT_N } from '../../lib/actuators';
 import type { GroupKey } from '../../lib/types';
@@ -63,7 +63,7 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
     if (syncMode !== 'none') return;
     setStats({ pullCount: 0, pullTotal: 0, pushCount: 0 });
     setSyncMode('pulling');
-    const keys = Object.keys(DEFAULT_PARAMS).filter(k => !/^PRE_OVR_/.test(k));
+    const keys = Object.keys(DEFAULT_PARAMS).filter(k => !SYNC_SKIP_RE.test(k));
     const r = await gcs.pullParams(keys, (g, t) => setStats(s => ({ ...s, pullCount: g, pullTotal: t })));
     setLog(l => [...l.slice(-199), {
       sev: r.timedOut ? 4 : 6,
@@ -79,7 +79,7 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
     setSyncMode('pushing');
     const map: Record<string, number> = {};
     for (const k of Object.keys(DEFAULT_PARAMS)) {
-      if (k in params && !/^PRE_OVR_/.test(k)) map[k] = params[k];
+      if (k in params && !SYNC_SKIP_RE.test(k)) map[k] = params[k];
     }
     const r = await gcs.pushParams(map, (s, t) => setStats(st => ({ ...st, pushCount: s, pullTotal: t })));
     setLog(l => [...l.slice(-199), {
@@ -94,42 +94,41 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
   const sevColor = (s: number) => s <= 2 ? 'text-err' : s <= 4 ? 'text-warn' : s <= 6 ? 'text-fg' : 'text-fg-dim';
   const healthy = connected && tlm.lastMsgMs && (Date.now() - tlm.lastMsgMs < 3000);
 
-  // ─── 实时 K (复刻 Lua main.lua 的 spd_eff 算法) ───
-  // NOGPS: spd_eff = [0, V1, V2][gear-1]  (强制断点 → K{gear-1})
-  // GPS:   spd_eff = min(GPS地速, V_gear)
+  // ─── 实时 K (v9 三档 静态查表, lua mixer.lua read_k_table 复刻) ───
+  // ch7 PWM <1300 → G1, 1300-1700 → G2, >1700 → G3, 各档 K_table 静态查 MSK_K{group}_{gear}
   const liveRcCh = (tlm as any).rc as number[] | undefined;
-  const gearChIdx = Math.max(1, Math.floor(params.MSK_GEAR_CH ?? 7)) - 1;
-  const modeChIdx = Math.max(1, Math.floor(params.MSK_MODE_CH ?? 6)) - 1;
+  const gearChIdx = 6;  // ch7 (固定 v9 默认, MSK_GEAR_CH 已删)
   const liveGearLocal = liveRcCh ? (() => {
     const pwm = liveRcCh[gearChIdx] ?? 1500;
     return pwm < 1300 ? 1 : pwm < 1700 ? 2 : 3;
   })() : 1;
-  const liveModeGps = liveRcCh ? (liveRcCh[modeChIdx] ?? 1500) > 1500 : true;
   const liveSpd = healthy ? (tlm.vfr?.groundspeed ?? 0) : null;
-  const liveSpdEff = useMemo(() => {
-    if (liveSpd == null) return 0;
-    if (!liveModeGps) {
-      const breakpoints = [0, params.MSK_V1 ?? 4, params.MSK_V2 ?? 8];
-      return breakpoints[liveGearLocal - 1] ?? 0;
-    }
-    const limit = liveGearLocal === 1 ? (params.MSK_V1 ?? 4)
-                : liveGearLocal === 2 ? (params.MSK_V2 ?? 8)
-                : (params.MSK_V_MAX ?? 20);
-    return Math.min(liveSpd, limit);
-  }, [liveSpd, liveModeGps, liveGearLocal, params.MSK_V1, params.MSK_V2, params.MSK_V_MAX]);
+  const liveSpdEff = liveSpd ?? 0;  // v9 没 V 断点, 直接用 GPS 地速做显示
 
+  // v9 P3.9: ch6 TEST (PWM>1700) 时全组 K 统一 = MSK_THR_TEST (跟 lua mixer.set_test_unified 一致)
+  const ch6Pwm = liveRcCh ? (liveRcCh[5] ?? 1500) : 1500;
   const liveK: Record<GroupKey, number> = useMemo(() => {
     if (liveSpd == null) return currentK ?? { KS:0, KDF:0, KT:0, KRD:0 };
-    const k: Record<GroupKey, number> = { KS:0, KDF:0, KT:0, KRD:0 };
-    for (const g of ['KS','KDF','KT','KRD'] as GroupKey[]) {
-      k[g] = Math.max(0, Math.min(1, evalCurve(g, liveSpdEff, params)));
+    if (ch6Pwm > 1700) {
+      const v = Math.max(0, Math.min(1, params.MSK_THR_TEST ?? 0.33));
+      return { KS: v, KDF: v, KT: v, KRD: v };
     }
-    return k;
-  }, [liveSpd, liveSpdEff, params, currentK]);
+    const g = `G${liveGearLocal}`;
+    const get = (grp: GroupKey) => {
+      const v = params[`MSK_${grp}_${g}`];
+      return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+    };
+    return { KS: get('KS'), KDF: get('KDF'), KT: get('KT'), KRD: get('KRD') };
+  }, [liveSpd, liveGearLocal, ch6Pwm, params.MSK_THR_TEST,
+      params.MSK_KS_G1, params.MSK_KS_G2, params.MSK_KS_G3,
+      params.MSK_KDF_G1, params.MSK_KDF_G2, params.MSK_KDF_G3,
+      params.MSK_KT_G1, params.MSK_KT_G2, params.MSK_KT_G3,
+      params.MSK_KRD_G1, params.MSK_KRD_G2, params.MSK_KRD_G3,
+      currentK]);
   const liveTotalThrust = MOTORS.reduce((s, m) => s + (liveK[m.group] ?? 0) * SINGLE_MOTOR_MAX_N, 0);
   const liveTW = liveTotalThrust / VEHICLE_WEIGHT_N;
 
-  const totalParams = Object.keys(DEFAULT_PARAMS).filter(k => !/^PRE_OVR_/.test(k)).length;
+  const totalParams = Object.keys(DEFAULT_PARAMS).filter(k => !SYNC_SKIP_RE.test(k)).length;
 
   return (
     <div className="grid grid-cols-12 gap-2 auto-rows-min">

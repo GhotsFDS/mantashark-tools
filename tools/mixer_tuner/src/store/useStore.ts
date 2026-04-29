@@ -118,11 +118,12 @@ export const useStore = create<AppState & Actions>()(
     {
       name: 'mantashark-tuner-v9',
       // Bumping version: 旧的 persisted state 会被 migrate() 处理. 改 schema 时 +1 强制清旧坏数据.
-      version: 5,
+      version: 7,
       migrate: (persisted: any, version: number) => {
         // v3 之前: selectedCurve 可能存了非法值导致崩溃 → 重置 UI 状态.
         // v4: simulateArmed 默认值改 false (旧的 true 会卡住调参 UI 显示"已 armed").
         // v5: 加 globalPreviewMode (默认 false, 下水初始状态)
+        // v6: DEFAULT_PARAMS 加 5 个 PRE_* 等新 key, 强制把缺的 key 用 default 补齐
         if (!persisted || version < 3) {
           persisted = {
             ...(persisted || {}),
@@ -137,6 +138,26 @@ export const useStore = create<AppState & Actions>()(
         }
         if (!persisted || version < 5) {
           persisted = { ...(persisted || {}), globalPreviewMode: false };
+        }
+        if (!persisted || version < 6) {
+          // 把 DEFAULT_PARAMS 缺失的 key 全部补回 (老 localStorage params 缺了新加的就显示不出)
+          // 已存在的 key 保留用户值, 不覆盖
+          persisted = {
+            ...persisted,
+            params: { ...DEFAULT_PARAMS, ...(persisted?.params || {}) },
+          };
+        }
+        if (!persisted || version < 7) {
+          // v7: 严格清 store, 只保留 DEFAULT_PARAMS 里有的 key (删旧 schema 残留:
+          // 4 老 K MSK_KS/KDF/KT/KRD, MSK_GEAR_CH/AUTO_CH/MODE_CH/RTL_CH, MSK_V1/V2/V3/V_MAX,
+          // GRD_*/MGEO_*/TLTC_* 等等). 缺的 key 用 default 补。
+          if (persisted.params) {
+            const cleaned: Record<string, number> = {};
+            for (const k of Object.keys(DEFAULT_PARAMS)) {
+              cleaned[k] = (k in persisted.params) ? persisted.params[k] : DEFAULT_PARAMS[k];
+            }
+            persisted.params = cleaned;
+          }
         }
         return persisted;
       },

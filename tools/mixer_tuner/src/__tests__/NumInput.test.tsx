@@ -62,7 +62,7 @@ describe('NumInput', () => {
     fireEvent.change(input, { target: { value: '999' } });
     fireEvent.blur(input);
     expect(onCommit).not.toHaveBeenCalled();
-    expect(input.value).toBe('50');
+    expect(input.value).toBe('50.00');  // 默认 step=0.01 → auto decimals=2
   });
 
   it('NaN 输入: 拒绝, 还原, 不推', () => {
@@ -109,7 +109,26 @@ describe('NumInput', () => {
     const input = screen.getByRole('spinbutton') as HTMLInputElement;
 
     rerender(<NumInput value={2000} onCommit={onCommit} />);
-    expect(input.value).toBe('2000');
+    expect(input.value).toBe('2000.00');  // 默认 step=0.01 → auto decimals=2
+  });
+
+  it.each([
+    [1,     5,     '5'],       // 整数
+    [0.5,   3.1,   '3.1'],     // 1 位
+    [0.1,   3.1,   '3.1'],     // 1 位
+    [0.05,  0.25,  '0.25'],    // 2 位
+    [0.01,  0.27,  '0.27'],    // 2 位 (整数边界, 修过 1e-9 bug)
+    [0.001, 0.012, '0.012'],   // 3 位
+  ])('step=%s value=%s 显示 %s 位 (auto decimals)', (step, value, expected) => {
+    render(<NumInput value={value} step={step} onCommit={() => {}} />);
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(input.value).toBe(expected);
+  });
+
+  it('mavlink float32 round-trip noise: 3.0999999 显示 "3.1" (step=0.5)', () => {
+    render(<NumInput value={3.0999999046325684} step={0.5} onCommit={() => {}} />);
+    const input = screen.getByRole('spinbutton') as HTMLInputElement;
+    expect(input.value).toBe('3.1');
   });
 
   it('箭头键 ↑↓ 触发 commit (jsdom 不实现 native step, 模拟 draft 已变)', async () => {
