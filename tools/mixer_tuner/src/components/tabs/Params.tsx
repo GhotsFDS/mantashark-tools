@@ -3,9 +3,9 @@
 import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useStore } from '../../store/useStore';
 import { exportParm, importParm, exportPhaseLua, downloadText } from '../../lib/parmIO';
-import { PARAM_PREFIXES, paramRange, paramLabel, SYNC_SKIP_RE, quantize, DEFAULT_PARAMS } from '../../lib/defaults';
+import { PARAM_PREFIXES, paramRange, paramLabel, SYNC_SKIP_RE, quantize, DEFAULT_PARAMS, PRESET_FLIGHT, PRESET_BENCH } from '../../lib/defaults';
 import { gcs } from '../../lib/gcs';
-import { Upload, Download, FileText, RotateCcw, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react';
+import { Upload, Download, FileText, RotateCcw, ArrowDownToLine, ArrowUpFromLine, Plane, Wrench } from 'lucide-react';
 
 // 所有参与同步的 key (跟 App-level autoSync / GCS pullAll 同范围)
 const SYNC_KEYS = Object.keys(DEFAULT_PARAMS).filter(k => !SYNC_SKIP_RE.test(k));
@@ -125,6 +125,25 @@ export function Params() {
     setLog('已重置为默认');
   };
 
+  // 一键应用预设 (推到 FC + 写本地 store)
+  const applyPreset = async (preset: Record<string, number>, name: string) => {
+    if (!gcsConnected) { setLog('❌ 未连接 FC'); return; }
+    if (busy !== 'idle') return;
+    if (!confirm(`应用"${name}"预设? 会覆盖以下 ${Object.keys(preset).length} 个参数到 FC:\n${Object.keys(preset).join(', ')}`)) return;
+    setBusy('pushing');
+    setStatusMsg(`应用 ${name}: 0/${Object.keys(preset).length}`);
+    // 同步本地 store + 推 FC
+    for (const [k, v] of Object.entries(preset)) setParam(k, v);
+    const r = await gcs.pushParams(preset, (a, t) => setStatusMsg(`应用 ${name}: ${a}/${t}`));
+    setSynced(prev => ({ ...prev, ...preset }));
+    setStatusMsg(r.timedOut
+      ? `⚠ ${name} 应用超时 ${r.acked}/${Object.keys(preset).length}`
+      : `✓ ${name} 已应用 ${r.acked} 个参数`);
+    setBusy('idle');
+    setLog(`已应用 ${name} 预设 (${r.acked}/${Object.keys(preset).length})`);
+    setTimeout(() => setStatusMsg(null), 4000);
+  };
+
   return (
     <div className="space-y-3">
       {/* 全局 Pull/Save toolbar (跟 FlightProfile 同模式) */}
@@ -157,13 +176,45 @@ export function Params() {
         </button>
       </div>
 
+      {/* 预设切换 (lua 自动切, 仅显示当前 + 手动覆盖入口) */}
+      <div className="card">
+        <div className="card-title flex items-center gap-2">
+          <span>ATC 预设 (lua 自动切)</span>
+        </div>
+        <div className="text-[11px] text-fg-mute leading-relaxed">
+          ch6 切档时 main.lua 自动写参数:
+          <ul className="list-disc ml-5 mt-1">
+            <li><b>IDLE / CHECK</b> → 飞行预设 (Q_A_ANG_RLL_P=4.5 / RAT_*_P=0.135 / ANGLE_MAX=10° / FB_SC=5)</li>
+            <li><b>TEST</b> → 地测预设 (Q_A_ANG_RLL_P=8 / RAT_*_P=0.4 / ANGLE_MAX=30° / FB_SC=25)</li>
+          </ul>
+          <span className="text-fg-dim block mt-1">不需手动按钮. STATUSTEXT 显示 "MSK 预设 -&gt; 飞行/地测". 实飞前 ch6 别拨到 TEST 即可.</span>
+        </div>
+        <div className="flex gap-2 flex-wrap mt-2">
+          <button
+            className="btn text-[10px] disabled:opacity-50"
+            disabled={!gcsConnected || busy !== 'idle'}
+            onClick={() => applyPreset(PRESET_FLIGHT, '飞行')}
+            title="手动覆盖: 应用飞行预设 (绕过 lua 自动切, 不常用)"
+          >
+            <Plane size={11} className="inline mr-1" />
+            手动应用飞行
+          </button>
+          <button
+            className="btn text-[10px] disabled:opacity-50"
+            disabled={!gcsConnected || busy !== 'idle'}
+            onClick={() => applyPreset(PRESET_BENCH, '地测')}
+            title="手动覆盖: 应用地测预设 (绕过 lua 自动切)"
+          >
+            <Wrench size={11} className="inline mr-1" />
+            手动应用地测
+          </button>
+        </div>
+      </div>
+
       {/* 文件导入/导出工具栏 */}
       <div className="card">
         <div className="card-title flex items-center gap-2">
           <span>文件 / 重置</span>
-          {!gcsConnected && (
-            <span className="chip text-[9px] text-warn ml-auto">未连接 FC · 拉取/保存按钮禁用</span>
-          )}
         </div>
         <div className="flex gap-2 flex-wrap">
           <button className="btn btn-primary" onClick={doExport}>

@@ -71,6 +71,39 @@ export const DEFAULT_PARAMS: ParamSet = {
 
 export const PARAM_PREFIXES = ['MSK', 'TLT', 'PRE'] as const;
 
+// ═══ 两套预设: 飞行 / 地测台架 (Params tab 一键切换) ═══
+// 共享: K 表 / 倾转表 / SERVO 标定 (实测调过的) — 都不在预设里, 用户自己 tune
+// 预设只切 ATC PID 增益 + tilt ATC scale + ANGLE_MAX
+export const PRESET_FLIGHT: Record<string, number> = {
+  // ArduPlane Q ATC 标准增益 (实飞用)
+  Q_A_ANGLE_MAX: 10,    // stick 满偏 ±10° (温和)
+  Q_A_ANG_RLL_P: 4.5,   // 角度环 P
+  Q_A_ANG_PIT_P: 4.5,
+  Q_A_RAT_RLL_P: 0.135, // 角速度环 P
+  Q_A_RAT_PIT_P: 0.135,
+  // Lua tilt ATC 反馈 scale (温和)
+  MSK_FB_R_SC: 5,
+  MSK_FB_P_SC: 5,
+  // thr_cap 限幅 (实飞 TEST 不用, 但保留 default 防误)
+  MSK_THR_CHECK: 0.30,
+  MSK_THR_TEST:  0.60,  // 实飞测试满推 60%
+};
+
+export const PRESET_BENCH: Record<string, number> = {
+  // 高增益: stick 满偏 → motor 100 PWM Δ + tilt 200+ PWM Δ (台架观察 ATC 反馈方向)
+  Q_A_ANGLE_MAX: 30,    // stick 满偏 ±30° → ATC target err 大 3x
+  Q_A_ANG_RLL_P: 8.0,   // 角度环 P × 1.8
+  Q_A_ANG_PIT_P: 8.0,
+  Q_A_RAT_RLL_P: 0.40,  // 角速度环 P × 3
+  Q_A_RAT_PIT_P: 0.40,
+  // Lua tilt ATC 反馈 scale 高 (满偏 25° = 277 PWM ≥ 200 ✓)
+  MSK_FB_R_SC: 25,
+  MSK_FB_P_SC: 25,
+  // thr_cap 限幅 1/3 (台架防失控)
+  MSK_THR_CHECK: 0.30,
+  MSK_THR_TEST:  0.33,
+};
+
 // 拉取/推送时跳过的参数:
 //   TLT_*_PRV (7) — 实时预览, 重启 lua 重置 -1, 跨会话不持久化
 //   (老 4 K MSK_KS/KDF/KT/KRD 已从 DEFAULT_PARAMS 删除)
