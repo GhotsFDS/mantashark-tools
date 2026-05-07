@@ -61,14 +61,24 @@ const FLIGHT_KEYS: string[] = [
   'TLT_RDL_G1','TLT_RDL_G2','TLT_RDL_G3',
   'TLT_RDR_G1','TLT_RDR_G2','TLT_RDR_G3',
   'TLT_SGRP_G1','TLT_SGRP_G2','TLT_SGRP_G3',
-  // 全局过渡速率
+  // 全局过渡速率 (兼容老 TLT_RATE 兜底, 推荐用 4 路分组 rate)
   'TLT_RATE','MSK_TRIM_RATE',
-  // ATC tilt 反馈
+  // v9 P4 tilt 带宽分级 (DF 快 / S 慢 / T+RD 中)
+  'MSK_TLT_R_DF','MSK_TLT_R_S','MSK_TLT_R_T','MSK_TLT_R_RD',
+  // ATC tilt 反馈 + 死区 (P4 摸黑加 deadband)
   'MSK_FB_EN','MSK_FB_P_SC','MSK_FB_R_SC','MSK_FB_V_SC',
-  // 三层级加速
+  'MSK_FB_R_DEAD','MSK_FB_P_DEAD',
+  // 三层级加速 + drift 学习
   'MSK_KT_LIM','MSK_L2_SGRP_RT','MSK_L2_RD_RT','MSK_K_DRFT_RT',
+  'MSK_TLT_DRFT_R','MSK_TLT_DRFT_M',
   // G3 速度 PID
   'MSK_V_TGT','MSK_V_PI_P','MSK_V_PI_I','MSK_V_PI_D',
+  // v9 P4 vmix 速度连续混合 (P4 默认开)
+  'MSK_VMIX_EN','MSK_VMIX_TAU','MSK_VMIX_LO','MSK_VMIX_MID','MSK_VMIX_HI',
+  // v9 P4 实战 GROUP_BOOST (G3 PID 加速 demand 在 4 组分配权重)
+  'MSK_BST_KS','MSK_BST_KDF','MSK_BST_KT','MSK_BST_KRD',
+  // v9 P4 实战 G3 油门杆 → V_TGT 范围 (ch3=1100→V_MIN, ch3=1900→V_MAX)
+  'MSK_V_MIN','MSK_V_MAX',
 ];
 
 export function FlightProfile() {
@@ -326,7 +336,7 @@ export function FlightProfile() {
 
       {/* v9 P3.2/P3.4 tilt ATC + V 反馈 */}
       <div className="card">
-        <div className="card-title">tilt ATC + V 反馈 (1Hz, G1/G3 启用, G2 跳过)</div>
+        <div className="card-title">tilt ATC 反馈 (50Hz, G1/G2/G3 三档全开; Layer≥2 时仅 T1+DF)</div>
         <div className="grid grid-cols-4 gap-3">
           <div>
             <div className="label mb-1">启用 (FB_EN)</div>
@@ -413,15 +423,111 @@ export function FlightProfile() {
         </div>
       </div>
 
+      {/* v9 P4 实战 GROUP_BOOST + V_TGT 范围 */}
+      <div className="card">
+        <div className="card-title">G3 加速分配 (GROUP_BOOST) + 油门杆=V_TGT 范围</div>
+        <div className="grid grid-cols-6 gap-3">
+          <div>
+            <div className="label mb-1">BST_KS</div>
+            <NumInput value={params.MSK_BST_KS ?? 0.5} min={0} max={1} step={0.01}
+                      onCommit={v => setLocal('MSK_BST_KS', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">S 副推力比例</div>
+          </div>
+          <div>
+            <div className="label mb-1">BST_KDF</div>
+            <NumInput value={params.MSK_BST_KDF ?? 0.0} min={0} max={1} step={0.01}
+                      onCommit={v => setLocal('MSK_BST_KDF', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">DF (建议 0, 主姿态)</div>
+          </div>
+          <div>
+            <div className="label mb-1">BST_KT</div>
+            <NumInput value={params.MSK_BST_KT ?? 1.0} min={0} max={1} step={0.01}
+                      onCommit={v => setLocal('MSK_BST_KT', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">T 主推 (建议 1.0)</div>
+          </div>
+          <div>
+            <div className="label mb-1">BST_KRD</div>
+            <NumInput value={params.MSK_BST_KRD ?? 0.5} min={0} max={1} step={0.01}
+                      onCommit={v => setLocal('MSK_BST_KRD', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">RD 副推+尾控</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_MIN (m/s)</div>
+            <NumInput value={params.MSK_V_MIN ?? 5.0} min={0} max={30} step={0.1}
+                      onCommit={v => setLocal('MSK_V_MIN', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">ch3=1100 时 V_TGT</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_MAX (m/s)</div>
+            <NumInput value={params.MSK_V_MAX ?? 14.0} min={0} max={30} step={0.1}
+                      onCommit={v => setLocal('MSK_V_MAX', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">ch3=1900 时 V_TGT</div>
+          </div>
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          <b>GROUP_BOOST</b>: G3 PID 速度 demand 在 4 组分配权重. K = (K_base + drift + boost × BST_K) × cap.
+          推杆=想更快 → V_TGT 升 + ATC throttle 升 + PID 拉 boost. 飞行员控制感: 杆位 = 目标速度.
+        </div>
+      </div>
+
+      {/* v9 P4 vmix */}
+      <div className="card">
+        <div className="card-title">vmix 速度连续混合 (P4 默认)</div>
+        <div className="grid grid-cols-5 gap-3">
+          <div>
+            <div className="label mb-1">VMIX_EN</div>
+            <NumInput value={params.MSK_VMIX_EN ?? 1} min={0} max={1} step={1}
+                      onCommit={v => setLocal('MSK_VMIX_EN', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">1=连续 0=离散三档</div>
+          </div>
+          <div>
+            <div className="label mb-1">VMIX_TAU (s)</div>
+            <NumInput value={params.MSK_VMIX_TAU ?? 0.5} min={0.05} max={5} step={0.05}
+                      onCommit={v => setLocal('MSK_VMIX_TAU', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">V LPF 时间常数</div>
+          </div>
+          <div>
+            <div className="label mb-1">VMIX_LO (m/s)</div>
+            <NumInput value={params.MSK_VMIX_LO ?? 3.0} min={0} max={30} step={0.1}
+                      onCommit={v => setLocal('MSK_VMIX_LO', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">V&lt;LO → α=0 (G1)</div>
+          </div>
+          <div>
+            <div className="label mb-1">VMIX_MID (m/s)</div>
+            <NumInput value={params.MSK_VMIX_MID ?? 6.5} min={0} max={30} step={0.1}
+                      onCommit={v => setLocal('MSK_VMIX_MID', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">V=MID → α=0.5 (G2)</div>
+          </div>
+          <div>
+            <div className="label mb-1">VMIX_HI (m/s)</div>
+            <NumInput value={params.MSK_VMIX_HI ?? 10.0} min={0} max={30} step={0.1}
+                      onCommit={v => setLocal('MSK_VMIX_HI', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">V&gt;HI → α=1 (G3)</div>
+          </div>
+        </div>
+      </div>
+
       {/* v9 P3.1 G3 PID 速度环 */}
       <div className="card">
         <div className="card-title">G3 速度环 (PID) — 进 G3 自动启用</div>
         <div className="grid grid-cols-4 gap-3">
           <div>
-            <div className="label mb-1">目标速度 V_TGT (m/s)</div>
+            <div className="label mb-1">老 V_TGT (兼容)</div>
             <NumInput value={params.MSK_V_TGT ?? 9.0} min={1} max={30} step={0.1}
                       onCommit={v => setLocal('MSK_V_TGT', v)}
                       className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">P4 用 ch3=V_TGT 替代</div>
           </div>
           <div>
             <div className="label mb-1">P 增益</div>

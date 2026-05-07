@@ -5,20 +5,22 @@ import { gcs, GcsMessage } from './lib/gcs';
 import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
 import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
-import { Waves, Sliders, Grid3x3, PlayCircle, Settings, PlugZap } from 'lucide-react';
+import { Waves, Sliders, Grid3x3, PlayCircle, Settings, PlugZap, FileSearch } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
 import { Tilts } from './components/tabs/Tilts';
 import { Geometry } from './components/tabs/Geometry';
 import { Preflight } from './components/tabs/Preflight';
 import { Params } from './components/tabs/Params';
 import { Gcs } from './components/tabs/Gcs';
+import { LogAnalysis } from './components/tabs/LogAnalysis';
 
-// v9 P3.6: GCS / 飞行配置 (3 档) / 舵机标定 / 预检 / 参数
+// v9 P4: GCS / 飞行配置 (3 档) / 舵机标定 / 预检 / LOG 分析 / 参数
 const TABS = [
   { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
   { id: 'profile',   label: '飞行配置',     Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
   { id: 'preflight', label: '预检',         Icon: PlayCircle },
+  { id: 'loganalysis', label: 'LOG 分析',   Icon: FileSearch },
   { id: 'params',    label: '参数',         Icon: Settings },
 ];
 
@@ -28,6 +30,9 @@ export default function App() {
   const [gcsArmed, setGcsArmed] = useState<boolean | null>(null);
   const [liveRc, setLiveRc] = useState<number[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // v9 P4 RTK 状态: GPS1 + GPS2 (双头 C-RTK2 HP)
+  const [liveGps, setLiveGps] = useState<{ fix_type: number; sats: number; yaw_deg: number | null; vel_mps: number | null } | null>(null);
+  const [liveGps2, setLiveGps2] = useState<{ fix_type: number; sats: number; yaw_deg: number | null } | null>(null);
 
   // ─── v9 通道语义 (CLAUDE.md 权威):
   //   ch7 g_mode 三档:  <1300 G1 慢滑 / 1300-1700 G2 抬头建气垫 / >1700 G3 巡航
@@ -100,6 +105,13 @@ export default function App() {
         setSimulateArmed(m.armed);
       }
       else if (m.type === 'rc') setLiveRc(m.channels);
+      else if (m.type === 'gps') setLiveGps({
+        fix_type: m.fix_type, sats: m.sats,
+        yaw_deg: m.yaw_deg ?? null, vel_mps: m.vel_mps ?? null,
+      });
+      else if (m.type === 'gps2') setLiveGps2({
+        fix_type: m.fix_type, sats: m.sats, yaw_deg: m.yaw_deg ?? null,
+      });
       else if (m.type === 'statustext') {
         if (/MSK (gear|mode|chk|thr|preflight|G[123])\b/i.test(m.text)) {
           setToast(m.text);
@@ -151,6 +163,7 @@ export default function App() {
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry currentK={currentK} />;
       case 'preflight': return <Preflight />;
+      case 'loganalysis': return <LogAnalysis />;
       case 'params':    return <Params />;
       default: return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
     }
@@ -242,6 +255,28 @@ export default function App() {
             <StatBox label="RTL">
               <span className="chip chip-err text-[10px] animate-pulse" title="ch12 高位 = ArduPlane GPS 返航激活">
                 ACTIVE
+              </span>
+            </StatBox>
+          )}
+          {/* v9 P4: RTK 状态 (双头 C-RTK2 HP fix type + heading) */}
+          {liveGps && (
+            <StatBox label="RTK">
+              <span
+                className={'chip chip-active text-[10px] ' + (
+                  liveGps.fix_type >= 6 ? 'text-ok' :
+                  liveGps.fix_type === 5 ? 'text-warn' :
+                  liveGps.fix_type >= 3 ? '' :
+                  'text-err'
+                )}
+                title={
+                  `GPS1 fix=${['NoGPS','NoFix','2D','3D','DGPS','RTK_Float','RTK_Fixed','Static','PPP'][liveGps.fix_type] || '?'} ` +
+                  `sats=${liveGps.sats}` +
+                  (liveGps.yaw_deg !== null ? ` yaw=${liveGps.yaw_deg.toFixed(1)}°` : ' (无 yaw)') +
+                  (liveGps2 ? ` | GPS2 sats=${liveGps2.sats} fix=${liveGps2.fix_type}` : '')
+                }
+              >
+                {['NoGPS','NoFix','2D','3D','DGPS','Float','Fixed','Static','PPP'][liveGps.fix_type] || '?'}
+                {liveGps.yaw_deg !== null && <span className="text-fg-dim ml-1">{liveGps.yaw_deg.toFixed(0)}°</span>}
               </span>
             </StatBox>
           )}

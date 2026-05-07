@@ -5,13 +5,18 @@ export type GcsMessage =
   | { type: 'heartbeat'; mode: string; armed: boolean }
   | { type: 'attitude'; roll: number; pitch: number; yaw: number }
   | { type: 'vfr_hud'; airspeed: number; groundspeed: number; alt: number; climb: number; throttle: number }
-  | { type: 'gps'; fix_type: number; sats: number; hdop: number | null }
+  | { type: 'gps'; fix_type: number; sats: number; hdop: number | null; yaw_deg?: number | null; alt_m?: number; vel_mps?: number | null; gps_id?: number }
+  | { type: 'gps2'; fix_type: number; sats: number; hdop: number | null; yaw_deg?: number | null; alt_m?: number; vel_mps?: number | null; gps_id?: number }
   | { type: 'param'; name: string; value: number; index: number; count: number }
   | { type: 'statustext'; severity: number; text: string }
   | { type: 'rc'; channels: number[] }
   | { type: 'servo'; channels: number[] }
   | { type: 'battery'; voltage: number; current: number | null; remaining: number; consumed_mah?: number; fallback?: boolean }
   | { type: 'pong'; ts: number }
+  | { type: 'log_analysis_progress'; pct: number; msg?: string }
+  | { type: 'log_analysis_done'; data?: any; error?: string }
+  | { type: 'pid_apply_done'; count: number }
+  | { type: 'pid_apply_err'; name: string; err: string }
   | { type: 'error'; msg: string };
 
 type Listener = (m: GcsMessage) => void;
@@ -91,6 +96,14 @@ export class GcsClient {
   }
   motorTestStop() { this.send({ type: 'motor_test_stop' }); }
   ping()      { this.send({ type: 'ping' }); }
+  // v9 P4: BIN 离线分析 (本地路径, mavbridge.py 用 pymavlink 解析)
+  analyzeLog(path: string, currentParams: Record<string, number>) {
+    this.send({ type: 'analyze_log', path, current_params: currentParams });
+  }
+  // v9 P4: 批量应用 PID 建议 (前端必须先 disarmed + 双确认 + 备份)
+  applyPids(params: Record<string, number>) {
+    this.send({ type: 'pid_apply', params });
+  }
 
   isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }
 

@@ -4,8 +4,8 @@
 import type { ParamSet } from './types';
 
 export const DEFAULT_PARAMS: ParamSet = {
-  // ═══ MSK_ v9 P2 三档 K (12 个) — 老 4 K (MSK_KS/KDF/KT/KRD) 已删, lua 不读 ═══
-  MSK_KS_G1:  0.10, MSK_KDF_G1: 0.05, MSK_KT_G1: 0.18, MSK_KRD_G1: 0.05,
+  // ═══ MSK_ v9 P4 三档 K (12 个) — 用户实测预设 2026-04-29 ═══
+  MSK_KS_G1:  0.50, MSK_KDF_G1: 0.30, MSK_KT_G1: 0.50, MSK_KRD_G1: 0.30,
   MSK_KS_G2:  0.50, MSK_KDF_G2: 0.50, MSK_KT_G2: 0.50, MSK_KRD_G2: 0.50,
   MSK_KS_G3:  0.20, MSK_KDF_G3: 0.20, MSK_KT_G3: 0.85, MSK_KRD_G3: 0.20,
   // ═══ v9 P3.1 G3 PID 速度环参数 ═══
@@ -14,9 +14,9 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_V_PI_I: 0.02,  // I 增益
   MSK_V_PI_D: 0.0,   // D 项 (用 V_actual 微分, 防 target 跳变. 默认 0, 振荡时调)
   // ═══ v9 P3.2/P3.4 tilt ATC + V 反馈 ═══
-  MSK_FB_EN:   1.0,   // 启用 (G1/G3 工作, G2 跃迁档跳过, 0 = 全关)
+  MSK_FB_EN:   1.0,   // tilt ATC 反馈总开关 (v9 P4: G1/G2/G3 三档都启用; 0=全关)
   MSK_FB_P_SC: 5.0,   // pitch bias scale (°/ATC unit)
-  MSK_FB_R_SC: 5.0,   // roll bias scale
+  MSK_FB_R_SC: 12.0,  // roll bias scale — 12 = 全杆 ±12°, 配 TL1/TR1 LMIN=25 双侧对称
   MSK_FB_V_SC: 8.0,   // RD V 反馈 scale (°/m/s err, 姿态稳态时 G3 启用, 朝 90° 助推)
   // v9 P3.4 base_pitch 切档 ramp 速率 (°/s, 0=阶跃)
   MSK_TRIM_RATE: 3.0,
@@ -25,6 +25,17 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_L2_SGRP_RT: 5.0,  // Layer 2 SGRP 改平 rate (°/s, 实飞调)
   MSK_L2_RD_RT:   3.0,  // Layer 2 RDL/RDR 改平 rate (°/s, 实飞调)
   MSK_K_DRFT_RT:  0.01, // P3.7 K_drift 学习 rate (/s, 默认 0.01, 实飞调; 0=关学习)
+  // v9 P4 摸黑 tilt drift 学习 (G3 5s 持续 pitch 偏 → SGRP/DF/RD drift 累加)
+  MSK_TLT_DRFT_R: 0.005, // tilt drift 学习 rate (°/s, 默认 0.005 比 K 慢半; 0=关)
+  MSK_TLT_DRFT_M: 15.0,  // tilt drift 上限 (°, 默认 ±15)
+  // v9 P4 tilt 带宽分级 (DF 惯量小快, S 整组桁架慢, T/RD 中等)
+  MSK_TLT_R_DF:   60.0,  // DFL/DFR rate (°/s, 快, 主姿态高带宽 pitch)
+  MSK_TLT_R_S:    12.0,  // S_GROUP_TILT rate (°/s, 慢, 大舵机拖 4 EDF)
+  MSK_TLT_R_T:    35.0,  // TL1/TR1 rate (°/s, 中, roll 主致动)
+  MSK_TLT_R_RD:   30.0,  // RDL/RDR rate (°/s, 中, 低头力矩 + 助推)
+  // v9 P4 ATC 反馈死区 (norm < dead → tilt 不动, KT 差动仍工作)
+  MSK_FB_R_DEAD:  0.1,   // roll 死区 (norm 单位, 0.1 ≈ 5° 姿态误差以内不动 tilt)
+  MSK_FB_P_DEAD:  0.0,   // pitch 死区 (默认 0 不开, pitch 大部分时间需主动调)
   // v9 P3.8 三档 base_pitch (°, ch7 切档时 Q_TRIM_PITCH ramp 目标)
   MSK_BPCH_G1: 5,    // G1 慢滑: 浮筒承重自然
   MSK_BPCH_G2: 11,   // G2 抬头建气垫
@@ -32,6 +43,21 @@ export const DEFAULT_PARAMS: ParamSet = {
   // v9 P3.9 thr_cap 限幅可调 (台架静态扭矩测试用)
   MSK_THR_CHECK: 0.30,  // ch6 中档限幅
   MSK_THR_TEST:  0.33,  // ch6 高档限幅 (1/3 推力, 防台架失控)
+  // v9 P4 vmix: 速度三段连续混合 G1↔G2↔G3
+  MSK_VMIX_EN:  1,     // 0=离散三档 (老 P3.10), 1=连续 vmix (P4 默认)
+  MSK_VMIX_TAU: 0.5,   // V LPF 时间常数 (s, 防 GPS 抖)
+  MSK_VMIX_LO:  3.0,   // V→α 三段映射: V<LO → α=0 (G1)
+  MSK_VMIX_MID: 6.5,   // V=MID → α=0.5 (G2 锚点)
+  MSK_VMIX_HI:  10.0,  // V>HI → α=1 (G3)
+  // v9 P4 实战: GROUP_BOOST 4 K. G3 PID 速度 demand 在 4 组分配权重
+  // 设计: T 主前推=1.0, S 副 0.5, RD 副 0.5, DF 不参与=0
+  MSK_BST_KS:  0.5,    // KS boost 比例 (0..1)
+  MSK_BST_KDF: 0.0,    // KDF boost 比例 (建议 0, DF 主姿态)
+  MSK_BST_KT:  1.0,    // KT boost 比例 (建议 1.0, 巡航主推全承担)
+  MSK_BST_KRD: 0.5,    // KRD boost 比例 (0..1)
+  // v9 P4 实战: G3 油门杆 → V_TGT 范围. ch3=1100→V_MIN, ch3=1900→V_MAX
+  MSK_V_MIN:   5.0,    // 最低目标速度 m/s
+  MSK_V_MAX:  14.0,    // 最高目标速度 m/s
 
   // ═══ TLT_ (tilt_driver, key=82) — 32+7=39 ═══
   TLT_CPL_SDF_K:   0.30,
@@ -40,8 +66,9 @@ export const DEFAULT_PARAMS: ParamSet = {
   // ZERO/DIR/LMIN/LMAX × 7 — v9 P3.10 实测标定 (2026-04-29 台架校准)
   TLT_DFL_ZERO:  1526, TLT_DFL_DIR:  1, TLT_DFL_LMIN: -45, TLT_DFL_LMAX:  45,
   TLT_DFR_ZERO:  1585, TLT_DFR_DIR: -1, TLT_DFR_LMIN: -45, TLT_DFR_LMAX:  45,
-  TLT_TL1_ZERO:  1373, TLT_TL1_DIR: -1, TLT_TL1_LMIN:  45, TLT_TL1_LMAX:  75,
-  TLT_TR1_ZERO:  1373, TLT_TR1_DIR: -1, TLT_TR1_LMIN:  45, TLT_TR1_LMAX:  75,
+  // TL1/TR1 非对称包络 (用户标定): abs 70°-135° (中位 90°, +45° 上 / -20° 下)
+  TLT_TL1_ZERO:  1373, TLT_TL1_DIR: -1, TLT_TL1_LMIN:  25, TLT_TL1_LMAX:  90,
+  TLT_TR1_ZERO:  1373, TLT_TR1_DIR: -1, TLT_TR1_LMIN:  25, TLT_TR1_LMAX:  90,
   TLT_RDL_ZERO:  1202, TLT_RDL_DIR: -1, TLT_RDL_LMIN:  -5, TLT_RDL_LMAX:  45,
   TLT_RDR_ZERO:  1233, TLT_RDR_DIR: -1, TLT_RDR_LMIN:  -5, TLT_RDR_LMAX:  45,
   TLT_SGRP_ZERO: 1549, TLT_SGRP_DIR: 1, TLT_SGRP_LMIN:-45, TLT_SGRP_LMAX:  30,
@@ -50,9 +77,11 @@ export const DEFAULT_PARAMS: ParamSet = {
   TLT_TL1_PRV:  -1, TLT_TR1_PRV:  -1,
   TLT_RDL_PRV:  -1, TLT_RDR_PRV:  -1,
   TLT_SGRP_PRV: -1,
-  // v9 P3.10 实测三档倾转 abs° (2026-04-29 台架校准, 跟标定 ZERO 配套)
-  TLT_DFL_G1:   0, TLT_DFL_G2:   0, TLT_DFL_G3:  30,
-  TLT_DFR_G1:   0, TLT_DFR_G2:   0, TLT_DFR_G3:  30,
+  // v9 P4 实测三档倾转 abs° (2026-04-29 台架校准, 跟标定 ZERO 配套, RDL/RDR LMAX=45° 顶 90° 物理上限)
+  // DFL/DFR G2 = 10 (而非 0): 给 S→DF 解耦补偿留头空间. S G2 abs 60° 时
+  // 补偿要 -4.5°, DF G2=0 (LMIN) 钳死补偿失败. G2=10 让 servo 能下到 abs 5.5°
+  TLT_DFL_G1:   0, TLT_DFL_G2:  10, TLT_DFL_G3:  30,
+  TLT_DFR_G1:   0, TLT_DFR_G2:  10, TLT_DFR_G3:  30,
   TLT_TL1_G1:  90, TLT_TL1_G2:  90, TLT_TL1_G3:  90,
   TLT_TR1_G1:  90, TLT_TR1_G2:  90, TLT_TR1_G3:  90,
   TLT_RDL_G1:  90, TLT_RDL_G2:  90, TLT_RDL_G3:  40,
@@ -139,8 +168,19 @@ export function paramRange(key: string) {
   if (/^MSK_KT_LIM$/.test(key))     return { min: 0.5, max: 1.0, step: 0.01 };
   if (/^MSK_L2_(SGRP|RD)_RT$/.test(key)) return { min: 0.5, max: 30, step: 0.5 };
   if (/^MSK_K_DRFT_RT$/.test(key))  return { min: 0, max: 0.1, step: 0.001 };
+  if (/^MSK_TLT_DRFT_R$/.test(key)) return { min: 0, max: 0.05, step: 0.001 };
+  if (/^MSK_TLT_DRFT_M$/.test(key)) return { min: 0, max: 30, step: 0.5 };
+  if (/^MSK_TLT_R_(DF|S|T|RD)$/.test(key)) return { min: 5, max: 120, step: 1 };
+  if (/^MSK_FB_[RP]_DEAD$/.test(key)) return { min: 0, max: 0.5, step: 0.01 };
   if (/^MSK_BPCH_G[123]$/.test(key)) return { min: 0, max: 20, step: 0.5 };
   if (/^MSK_THR_(CHECK|TEST)$/.test(key)) return { min: 0, max: 1, step: 0.01 };
+  // v9 P4 vmix
+  if (/^MSK_VMIX_EN$/.test(key))  return { min: 0, max: 1, step: 1 };
+  if (/^MSK_VMIX_TAU$/.test(key)) return { min: 0.05, max: 5, step: 0.05 };
+  if (/^MSK_VMIX_(LO|MID|HI)$/.test(key)) return { min: 0, max: 30, step: 0.1 };
+  // v9 P4 实战: GROUP_BOOST 4 K + V 范围
+  if (/^MSK_BST_K(S|DF|T|RD)$/.test(key)) return { min: 0, max: 1, step: 0.01 };
+  if (/^MSK_V_(MIN|MAX)$/.test(key)) return { min: 0, max: 30, step: 0.1 };
   if (/^TLT_.*_ZERO$/.test(key)) return { min: 500, max: 2500, step: 1 };
   if (/^TLT_.*_DIR$/.test(key))  return { min: -1, max: 1, step: 1 };  // 三态 -1/0/+1
   if (/^TLT_.*_LMIN$/.test(key)) return { min: -180, max: 0, step: 1 };
@@ -188,6 +228,14 @@ export const PARAM_LABELS: Record<string, string> = {
   MSK_L2_SGRP_RT: 'Layer2 SGRP 改平 rate °/s',
   MSK_L2_RD_RT:   'Layer2 RDL/RDR 改平 rate °/s',
   MSK_K_DRFT_RT:  'K_drift 学习 rate /s (0=关, 0.005-0.02 学习)',
+  MSK_TLT_DRFT_R: 'tilt drift 学习 rate °/s (摸黑高速段 SGRP/DF/RD)',
+  MSK_TLT_DRFT_M: 'tilt drift 上限 ° (±值, 防发散)',
+  MSK_TLT_R_DF:   'DFL/DFR 倾转 rate °/s (惯量小, 快带宽)',
+  MSK_TLT_R_S:    'S 组倾转 rate °/s (整组桁架, 慢带宽)',
+  MSK_TLT_R_T:    'TL1/TR1 倾转 rate °/s (roll 主致动, 中带宽)',
+  MSK_TLT_R_RD:   'RDL/RDR 倾转 rate °/s (低头力矩, 中带宽)',
+  MSK_FB_R_DEAD:  'roll ATC 反馈死区 (norm 0-1, 内 tilt 不动 KT 差动兜底)',
+  MSK_FB_P_DEAD:  'pitch ATC 反馈死区 (默认 0 关, pitch 通常需主动调)',
   // ═ MSK base_pitch 三档 (3) ═
   MSK_BPCH_G1: '档1 base_pitch ° (慢滑, 浮筒承重自然)',
   MSK_BPCH_G2: '档2 base_pitch ° (抬头建气垫)',
@@ -195,6 +243,20 @@ export const PARAM_LABELS: Record<string, string> = {
   // ═ MSK thr_cap 限幅可调 (台架静态扭矩测试) ═
   MSK_THR_CHECK: 'ch6 中档 thr_cap 限幅 (默认 0.30 = 30%)',
   MSK_THR_TEST:  'ch6 高档 thr_cap 限幅 (默认 0.33 = 1/3 推力, 台架静态测试用)',
+  // ═ MSK vmix 速度连续混合 (P4) ═
+  MSK_VMIX_EN:  'vmix 总开关 (1=连续 V→α 默认, 0=离散三档回退)',
+  MSK_VMIX_TAU: 'V 估计 LPF 时间常数 s (防 GPS 抖)',
+  MSK_VMIX_LO:  'V→α 三段映射: V<LO → α=0 (G1)',
+  MSK_VMIX_MID: 'V=MID → α=0.5 (G2 锚点)',
+  MSK_VMIX_HI:  'V>HI → α=1 (G3)',
+  // ═ MSK GROUP_BOOST 加速分配 (4) ═
+  MSK_BST_KS:  'KS boost 比例 (0..1, G3 PID 加速 demand 分配权重)',
+  MSK_BST_KDF: 'KDF boost 比例 (建议 0, DF 主姿态不参与速度)',
+  MSK_BST_KT:  'KT boost 比例 (建议 1.0, 巡航主推全承担)',
+  MSK_BST_KRD: 'KRD boost 比例 (0..1, 副推+尾控)',
+  // ═ MSK G3 油门杆 V 控制 (2) ═
+  MSK_V_MIN:  '油门杆=1100 时 V_TGT m/s',
+  MSK_V_MAX:  '油门杆=1900 时 V_TGT m/s',
   // ═ TLT 全局 (4) ═
   TLT_CPL_SDF_K:    'S→DF 软解耦补偿系数 (0..1)',
   TLT_CPL_EN:       'S→DF 软解耦总开关 (0=关 1=开默认)',

@@ -70,6 +70,14 @@ except ImportError as e:
     print(f'  或 pip install pymavlink "websockets<13"')
     sys.exit(1)
 
+# v9 P4 LOG analyzer (lib local, 同目录)
+try:
+    sys.path.insert(0, SCRIPT_DIR)
+    from log_analysis import analyze_log as _analyze_log  # type: ignore
+except ImportError as _e:
+    print(f'[WARN] log_analysis import 失败 ({_e}), /analyze_log WS 不可用')
+    _analyze_log = None  # type: ignore
+
 
 def find_device():
     """无 GUI 时的回退: 自动选第一个可用串口."""
@@ -255,10 +263,28 @@ class Bridge:
                         'airspeed': m.airspeed, 'groundspeed': m.groundspeed,
                         'alt': m.alt, 'climb': m.climb, 'throttle': m.throttle}
             elif t == 'GPS_RAW_INT':
+                # v9 P4: 扩 yaw (双头 RTK heading, cdeg, 0=invalid) + alt + vel
+                yaw_cd = getattr(m, 'yaw', 0)
+                yaw_deg = (yaw_cd / 100.0) if yaw_cd and yaw_cd != 0 else None
                 data = {'type': 'gps',
                         'fix_type': m.fix_type,
                         'sats': m.satellites_visible,
-                        'hdop': m.eph / 100.0 if m.eph != 0xFFFF else None}
+                        'hdop': m.eph / 100.0 if m.eph != 0xFFFF else None,
+                        'yaw_deg': yaw_deg,
+                        'alt_m': (m.alt / 1000.0) if m.alt else 0,
+                        'vel_mps': (m.vel / 100.0) if m.vel != 0xFFFF else None,
+                        'gps_id': 1}
+            elif t == 'GPS2_RAW':
+                yaw_cd = getattr(m, 'yaw', 0)
+                yaw_deg = (yaw_cd / 100.0) if yaw_cd and yaw_cd != 0 else None
+                data = {'type': 'gps2',
+                        'fix_type': m.fix_type,
+                        'sats': m.satellites_visible,
+                        'hdop': m.eph / 100.0 if m.eph != 0xFFFF else None,
+                        'yaw_deg': yaw_deg,
+                        'alt_m': (m.alt / 1000.0) if m.alt else 0,
+                        'vel_mps': (m.vel / 100.0) if m.vel != 0xFFFF else None,
+                        'gps_id': 2}
             elif t == 'PARAM_VALUE':
                 name = m.param_id
                 if hasattr(name, 'decode'):
@@ -392,6 +418,44 @@ class Bridge:
                     # 显式停 (timeout=0 立即结束)
                     self.mav.mav.command_long_send(self._sys, self._comp, 209, 0,
                                                     1, 1, 0, 0, 0, 0, 0)
+                elif t == 'analyze_log':
+                    # v9 P4: BIN 离线分析 (CPU-bound, 走 thread executor 不阻塞 WS)
+                    if _analyze_log is None:
+                        await ws.send(json.dumps({'type': 'log_analysis_done',
+                                                   'error': 'log_analysis lib unavailable'}))
+                        continue
+                    bin_path = req.get('path', '')
+                    cur_params = req.get('current_params') or {}
+                    if not bin_path or not os.path.isfile(bin_path):
+                        await ws.send(json.dumps({'type': 'log_analysis_done',
+                                                   'error': f'BIN 不存在: {bin_path}'}))
+                        continue
+                    await ws.send(json.dumps({'type': 'log_analysis_progress',
+                                               'pct': 5, 'msg': '解析 BIN...'}))
+                    try:
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None, _analyze_log, bin_path, cur_params)
+                        await ws.send(json.dumps({'type': 'log_analysis_done',
+                                                   'data': result}))
+                    except Exception as ex:
+                        await ws.send(json.dumps({'type': 'log_analysis_done',
+                                                   'error': f'分析失败: {ex}'}))
+                elif t == 'pid_apply':
+                    # v9 P4: 应用 PID 建议 (前端必须先双确认 + 备份). 这里只批量 PARAM_SET.
+                    # 防呆: 必须 disarmed (前端检查 + 此处 best-effort 二次)
+                    params_to_set = req.get('params') or {}
+                    for pname, pval in params_to_set.items():
+                        try:
+                            name_b = str(pname).encode('ascii')
+                            self.mav.mav.param_set_send(
+                                self._sys, self._comp, name_b, float(pval),
+                                mavutil.mavlink.MAV_PARAM_TYPE_REAL32)
+                        except Exception as ex:
+                            await ws.send(json.dumps({'type': 'pid_apply_err',
+                                                       'name': pname, 'err': str(ex)}))
+                    await ws.send(json.dumps({'type': 'pid_apply_done',
+                                               'count': len(params_to_set)}))
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:

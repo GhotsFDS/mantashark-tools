@@ -72,11 +72,11 @@ describe('FlightProfile Pull/Save', () => {
     });
   });
 
-  it('按拉取 → 调 gcs.pullParams 50 个 key, 进度回调更新文案', async () => {
+  it('按拉取 → 调 gcs.pullParams 58 个 key (v9 P4), 进度回调更新文案', async () => {
     (gcs.pullParams as any).mockImplementation(async (_keys: string[], onProgress: any) => {
-      onProgress?.(10, 50);
-      onProgress?.(50, 50);
-      return { got: 50, missing: [], timedOut: false };
+      onProgress?.(10, 58);
+      onProgress?.(58, 58);
+      return { got: 58, missing: [], timedOut: false };
     });
     render(<FlightProfile />);
     await act(async () => { await new Promise(r => setTimeout(r, 1700)); });
@@ -86,10 +86,10 @@ describe('FlightProfile Pull/Save', () => {
 
     expect(gcs.pullParams).toHaveBeenCalledTimes(1);
     const calledKeys = (gcs.pullParams as any).mock.calls[0][0];
-    expect(calledKeys.length).toBe(50);
+    expect(calledKeys.length).toBe(58);
 
     await waitFor(() => {
-      expect(screen.getByText(/已拉取 50/)).toBeInTheDocument();
+      expect(screen.getByText(/已拉取 58/)).toBeInTheDocument();
     });
   });
 
@@ -166,15 +166,15 @@ describe('FlightProfile Pull/Save', () => {
     await waitFor(() => expect(saveBtn.disabled).toBe(false));
   });
 
-  it('FLIGHT_KEYS 数量恰好 50 (跟 lua mixer.lua 32 + tilt_driver.lua 22 减去无关项)', async () => {
-    (gcs.pullParams as any).mockResolvedValue({ got: 50, missing: [], timedOut: false });
+  it('FLIGHT_KEYS 数量恰好 58 (v9 P4: 50 + 4 tilt rate + 2 deadband + 2 tilt drift)', async () => {
+    (gcs.pullParams as any).mockResolvedValue({ got: 58, missing: [], timedOut: false });
     render(<FlightProfile />);
     await act(async () => { await new Promise(r => setTimeout(r, 1700)); });
 
     fireEvent.click(screen.getByTitle(/从飞控读取/));
     await waitFor(() => expect(gcs.pullParams).toHaveBeenCalled());
     const calledKeys: string[] = (gcs.pullParams as any).mock.calls[0][0];
-    expect(calledKeys.length).toBe(50);
+    expect(calledKeys.length).toBe(58);
     // 关键 key 都在 (回归保护: 漏 1 个 lua 永远收不到 PARAM_VALUE → 永远超时)
     for (const must of ['MSK_BPCH_G1','MSK_KT_G3','MSK_V_TGT','TLT_RATE','MSK_TRIM_RATE','MSK_K_DRFT_RT','TLT_SGRP_G3']) {
       expect(calledKeys).toContain(must);
