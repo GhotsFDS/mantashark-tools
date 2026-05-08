@@ -55,9 +55,29 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_BST_KDF: 0.0,    // KDF boost 比例 (建议 0, DF 主姿态)
   MSK_BST_KT:  1.0,    // KT boost 比例 (建议 1.0, 巡航主推全承担)
   MSK_BST_KRD: 0.5,    // KRD boost 比例 (0..1)
-  // v9 P4 实战: G3 油门杆 → V_TGT 范围. ch3=1100→V_MIN, ch3=1900→V_MAX
-  MSK_V_MIN:   5.0,    // 最低目标速度 m/s
-  MSK_V_MAX:  14.0,    // 最高目标速度 m/s
+  // v9 P4 实战 (设计 X): G3 速度控制 — ch10 旋钮命令加速度, ch3 lua override=1900 锁满
+  MSK_V_MIN:        5.0,   // V_TGT 绝对下限 m/s
+  MSK_V_MAX:       14.0,   // V_TGT 绝对上限 m/s
+  MSK_V_DRIVE_MIN:  9.0,   // G3 入档 V_TGT 兜底 (破驼峰必须 ≥ 9 m/s)
+  MSK_V_ACC_MAX:    2.0,   // ch10 满杆加速度 m/s² (推杆 1s V_TGT +2 m/s)
+  MSK_V_DEADZONE:  50,     // ch10 中位死区 PWM ±50 (维持 V_TGT 不动)
+  // v9 P4 修关键: DF tilt ATC 系数 + Layer 2 emergency 阈值
+  MSK_FB_P_SC_DF:  75,     // DF tilt ATC 反馈系数 (默认 1.5× FB_P_SC, DF 优先抬头)
+  MSK_P_EMRG_DEG:  1.5,    // Layer 2 emergency 阈值 °, vehicle pitch 偏 target 这么多就让 ATC 接管 S/RD
+  // v9 P4 暴露之前硬编码的 5 个关键阈值
+  MSK_BST_SAT_HI:  0.95,   // Layer 1→2 进入 (boost 撞顶阈值)
+  MSK_BST_SAT_LO:  0.85,   // Layer 2→1 退出 hysteresis
+  MSK_V_INT_LIM:   10.0,   // PID I 项 cap (anti-windup)
+  MSK_G3_RAMP_MS:  1500,   // G2→G3 boost 渐进时长 ms
+  MSK_DRFT_TIME:   5.0,    // drift 学习触发持续时长 s
+
+  // ═══ MSK2_ (key=84) — 副表 6 个 (主表满 63 后追加) ═══
+  MSK2_DRFT_DZ:    0.2,    // pitch demand 死区 (>该值才学 drift)
+  MSK2_DRFT_KS_R:  1.0,    // KS K drift 学率因子
+  MSK2_DRFT_KDF_R: 0.5,    // KDF K drift 学率因子
+  MSK2_DRFT_KT_R:  0.3,    // KT K drift 学率因子 (跟 G3 boost 撞, 抑)
+  MSK2_DRFT_KRD_R: 0.0,    // KRD K drift 学率因子 (sign 反向, 默认关)
+  MSK2_KRAMP_MS:   1000,   // vmix=0 切档 K 表 ramp 时长 ms
 
   // ═══ TLT_ (tilt_driver, key=82) — 32+7=39 ═══
   TLT_CPL_SDF_K:   0.30,
@@ -180,7 +200,19 @@ export function paramRange(key: string) {
   if (/^MSK_VMIX_(LO|MID|HI)$/.test(key)) return { min: 0, max: 30, step: 0.1 };
   // v9 P4 实战: GROUP_BOOST 4 K + V 范围
   if (/^MSK_BST_K(S|DF|T|RD)$/.test(key)) return { min: 0, max: 1, step: 0.01 };
-  if (/^MSK_V_(MIN|MAX)$/.test(key)) return { min: 0, max: 30, step: 0.1 };
+  if (/^MSK_V_(MIN|MAX|DRIVE_MIN)$/.test(key)) return { min: 0, max: 30, step: 0.1 };
+  if (/^MSK_V_ACC_MAX$/.test(key)) return { min: 0, max: 10, step: 0.1 };
+  if (/^MSK_V_DEADZONE$/.test(key)) return { min: 0, max: 200, step: 1 };
+  if (/^MSK_FB_P_SC_DF$/.test(key)) return { min: 0, max: 200, step: 1 };
+  if (/^MSK_P_EMRG_DEG$/.test(key)) return { min: 0.1, max: 10, step: 0.1 };
+  if (/^MSK_BST_SAT_(HI|LO)$/.test(key)) return { min: 0.5, max: 1.0, step: 0.01 };
+  if (/^MSK_V_INT_LIM$/.test(key)) return { min: 1, max: 50, step: 0.5 };
+  if (/^MSK_G3_RAMP_MS$/.test(key)) return { min: 0, max: 5000, step: 100 };
+  if (/^MSK_DRFT_TIME$/.test(key)) return { min: 0.5, max: 30, step: 0.5 };
+  // ═ MSK2_ 副表 6 个 ═
+  if (/^MSK2_DRFT_DZ$/.test(key))     return { min: 0, max: 1, step: 0.01 };
+  if (/^MSK2_DRFT_K(S|DF|T|RD)_R$/.test(key)) return { min: 0, max: 2, step: 0.05 };
+  if (/^MSK2_KRAMP_MS$/.test(key))    return { min: 0, max: 5000, step: 50 };
   if (/^TLT_.*_ZERO$/.test(key)) return { min: 500, max: 2500, step: 1 };
   if (/^TLT_.*_DIR$/.test(key))  return { min: -1, max: 1, step: 1 };  // 三态 -1/0/+1
   if (/^TLT_.*_LMIN$/.test(key)) return { min: -180, max: 0, step: 1 };
@@ -254,9 +286,26 @@ export const PARAM_LABELS: Record<string, string> = {
   MSK_BST_KDF: 'KDF boost 比例 (建议 0, DF 主姿态不参与速度)',
   MSK_BST_KT:  'KT boost 比例 (建议 1.0, 巡航主推全承担)',
   MSK_BST_KRD: 'KRD boost 比例 (0..1, 副推+尾控)',
-  // ═ MSK G3 油门杆 V 控制 (2) ═
-  MSK_V_MIN:  '油门杆=1100 时 V_TGT m/s',
-  MSK_V_MAX:  '油门杆=1900 时 V_TGT m/s',
+  // ═ MSK G3 速度控制 (设计 X, ch10 旋钮 + 加速度命令) ═
+  MSK_V_MIN:        'V_TGT 绝对下限 m/s',
+  MSK_V_MAX:        'V_TGT 绝对上限 m/s',
+  MSK_V_DRIVE_MIN:  'G3 入档 V_TGT 兜底 m/s (破驼峰至少 9)',
+  MSK_V_ACC_MAX:    'ch10 满杆加速度 m/s² (推杆 1s V_TGT +N)',
+  MSK_V_DEADZONE:   'ch10 中位死区 PWM (维持 V_TGT 不变)',
+  MSK_FB_P_SC_DF:   'DF tilt ATC 反馈系数 (默认 1.5× FB_P_SC, DF 主抬头优先)',
+  MSK_P_EMRG_DEG:   'Layer 2 emergency 阈值 °, pitch 偏 target 这多就 ATC 接管 S/RD (LOG17 case 卡 -3.8° 因之前看 normalized output 0.3 永不触发)',
+  MSK_BST_SAT_HI:   'Layer 1→2 进入阈值 (boost ≥ 这值进 Layer 2 加平), 默认 0.95 留 5% ATC 头空间',
+  MSK_BST_SAT_LO:   'Layer 2→1 退出 hysteresis (boost < 这值退 Layer 2), 默认 0.85 防 0.95 边缘抖动',
+  MSK_V_INT_LIM:    'G3 PID I 项绝对值 cap, 默认 10 (anti-windup 配合, 越大越积越久)',
+  MSK_G3_RAMP_MS:   'G2→G3 boost 渐进时长 ms, 默认 1500 (1.5s 软启动, 防瞬态满推冲)',
+  MSK_DRFT_TIME:    'drift 学习触发持续时长 s, 默认 5 (pitch_in 持续偏死区这么久才学)',
+  // ═ MSK2_ 副表 6 (主表满 63 后追加) ═
+  MSK2_DRFT_DZ:     'drift 触发死区 (|pitch_in| > 该值才学), 默认 0.2',
+  MSK2_DRFT_KS_R:   'KS K drift 学率因子, 默认 1.0 (主升力, 全速学)',
+  MSK2_DRFT_KDF_R:  'KDF K drift 学率因子, 默认 0.5 (主姿态, 半速学)',
+  MSK2_DRFT_KT_R:   'KT K drift 学率因子, 默认 0.3 (跟 G3 boost 撞, 抑)',
+  MSK2_DRFT_KRD_R:  'KRD K drift 学率因子, 默认 0.0 (sign 反向; 飞稳后改 0.5 打开)',
+  MSK2_KRAMP_MS:    'vmix=0 切档 K 表 ramp 时长 ms, 默认 1000 (vmix=1 不用)',
   // ═ TLT 全局 (4) ═
   TLT_CPL_SDF_K:    'S→DF 软解耦补偿系数 (0..1)',
   TLT_CPL_EN:       'S→DF 软解耦总开关 (0=关 1=开默认)',

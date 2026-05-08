@@ -70,6 +70,13 @@ except ImportError as e:
     print(f'  或 pip install pymavlink "websockets<13"')
     sys.exit(1)
 
+# v9 P4 RTK manager (9PS Survey-In + RTCM3 → MAVLink GPS_RTCM_DATA 注入)
+try:
+    from rtk import RtkManager
+except ImportError:
+    RtkManager = None
+    print('[WARN] rtk.py 缺失, RTK 功能不可用')
+
 # v9 P4 LOG analyzer (lib local, 同目录)
 try:
     sys.path.insert(0, SCRIPT_DIR)
@@ -208,6 +215,8 @@ class Bridge:
         self.last_battery_voltage = 0
         self.last_battery_remaining = -1
         self.last_battery_consumed = 0
+        # RTK manager (lazy init after FC connect, needs mav handle)
+        self.rtk = None
 
     def connect_mav(self):
         print(f'[bridge] 连 FC: {self.device} @ {self.baud}')
@@ -231,6 +240,25 @@ class Bridge:
                 print(f'[bridge] MP 桥: {spec} ✓')
             except Exception as e:
                 print(f'[bridge] MP 桥失败 {spec}: {e}')
+
+        # RTK manager: forward 9PS RTCM3 → FC GPS_RTCM_DATA
+        # Backup raw RTCM byte stream to LOGS/<date>_<src>.gpsbase (MP-style)
+        if RtkManager is not None:
+            backup_dir = os.path.join(SCRIPT_DIR, '..', '..', 'LOGS', 'rtk')
+            self.rtk = RtkManager(
+                self.mav, self._sys, self._comp,
+                on_status=lambda d: self._broadcast_thread('rtk_status', d),
+                on_svin=lambda d: self._broadcast_thread('rtk_svin', d),
+                on_inject=lambda d: self._broadcast_thread('rtk_inject', d),
+                backup_dir=os.path.normpath(backup_dir),
+            )
+
+    def _broadcast_thread(self, type_str, data_dict):
+        """Thread-safe broadcast helper for RTK callbacks (called from RTK reader thread)."""
+        if self.loop is None:
+            return
+        msg = {'type': type_str, **data_dict}
+        asyncio.run_coroutine_threadsafe(self.broadcast(msg), self.loop)
 
     def mav_loop(self):
         """后台线程: 收 MAVLink → 广播给 WS 客户端 + 转发给 MP."""
@@ -294,6 +322,16 @@ class Bridge:
                         'value': float(m.param_value),
                         'index': m.param_index,
                         'count': m.param_count}
+            elif t == 'GLOBAL_POSITION_INT':
+                # Push rover position to RTK NtripClient for $GPGGA (VRS support).
+                # Suppressed broadcast to WS (Tuner UI doesn't need this stream).
+                if self.rtk is not None:
+                    try:
+                        self.rtk.update_rover_position(
+                            m.lat / 1e7, m.lon / 1e7, m.alt / 1000.0)
+                    except Exception:
+                        pass
+                continue
             elif t == 'STATUSTEXT':
                 # pymavlink MAVLink_statustext_message.__init__ 把 text 强制 ascii decode 替换非 ASCII,
                 # m.text 拿到时已经全是 '?'. 必须从 _text_raw (原始 bytes) 重新按 utf-8 解码.
@@ -441,6 +479,76 @@ class Bridge:
                     except Exception as ex:
                         await ws.send(json.dumps({'type': 'log_analysis_done',
                                                    'error': f'分析失败: {ex}'}))
+                elif t == 'rtk_connect':
+                    if self.rtk is None:
+                        await ws.send(json.dumps({'type':'rtk_status','error':'RTK module unavailable'}))
+                        continue
+                    port = req.get('port', '').strip()
+                    baud = int(req.get('baud', 115200))
+                    if not port:
+                        await ws.send(json.dumps({'type':'rtk_status','error':'port empty'}))
+                        continue
+                    self.rtk.connect(port, baud)
+                elif t == 'rtk_disconnect':
+                    if self.rtk:
+                        self.rtk.disconnect()
+                elif t == 'rtk_survey_start':
+                    if self.rtk:
+                        min_dur = int(req.get('min_dur', 60))
+                        acc_mm = int(req.get('acc_mm', 2500))
+                        self.rtk.start_survey_in(min_dur, acc_mm)
+                elif t == 'rtk_survey_stop':
+                    if self.rtk:
+                        self.rtk.stop_survey_in()
+                elif t == 'rtk_inject':
+                    if self.rtk:
+                        self.rtk.set_inject(bool(req.get('on', False)))
+                elif t == 'rtk_list_ports':
+                    # Return available serial ports for 9PS picker
+                    try:
+                        from serial.tools import list_ports
+                        ports = []
+                        for p in list_ports.comports():
+                            ports.append({'device': p.device, 'description': p.description,
+                                          'manufacturer': p.manufacturer or '',
+                                          'vid': p.vid, 'pid': p.pid})
+                        await ws.send(json.dumps({'type':'rtk_ports','ports':ports}))
+                    except Exception as ex:
+                        await ws.send(json.dumps({'type':'rtk_ports','error':str(ex)}))
+                elif t == 'rtk_fixed_pos':
+                    if self.rtk:
+                        try:
+                            lat = float(req.get('lat', 0))
+                            lon = float(req.get('lon', 0))
+                            alt = float(req.get('alt', 0))
+                            acc = int(req.get('acc_mm', 100))
+                            self.rtk.set_fixed_position(lat, lon, alt, acc)
+                        except Exception as ex:
+                            await ws.send(json.dumps({'type':'rtk_status','error':f'fixed_pos: {ex}'}))
+                elif t == 'rtk_ntrip_connect':
+                    if self.rtk:
+                        host = req.get('host', '').strip()
+                        port = int(req.get('port', 2101))
+                        mp = req.get('mountpoint', '').strip()
+                        user = req.get('user', '')
+                        pw = req.get('password', '')
+                        v1 = bool(req.get('v1', False))
+                        if not host or not mp:
+                            await ws.send(json.dumps({'type':'rtk_status','error':'host/mountpoint required'}))
+                        else:
+                            self.rtk.ntrip_connect(host, port, mp, user, pw, ntrip_v1=v1)
+                elif t == 'rtk_ntrip_disconnect':
+                    if self.rtk:
+                        self.rtk.ntrip_disconnect()
+                elif t == 'rtk_ntrip_sourcetable':
+                    if self.rtk:
+                        host = req.get('host', '').strip()
+                        port = int(req.get('port', 2101))
+                        try:
+                            entries = self.rtk.ntrip_fetch_sourcetable(host, port)
+                            await ws.send(json.dumps({'type':'rtk_sourcetable','entries':entries}))
+                        except Exception as ex:
+                            await ws.send(json.dumps({'type':'rtk_sourcetable','error':str(ex)}))
                 elif t == 'pid_apply':
                     # v9 P4: 应用 PID 建议 (前端必须先双确认 + 备份). 这里只批量 PARAM_SET.
                     # 防呆: 必须 disarmed (前端检查 + 此处 best-effort 二次)

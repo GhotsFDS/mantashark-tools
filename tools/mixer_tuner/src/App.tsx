@@ -5,7 +5,7 @@ import { gcs, GcsMessage } from './lib/gcs';
 import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
 import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
-import { Waves, Sliders, Grid3x3, PlayCircle, Settings, PlugZap, FileSearch } from 'lucide-react';
+import { Waves, Sliders, Grid3x3, PlayCircle, Settings, PlugZap, FileSearch, Satellite } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
 import { Tilts } from './components/tabs/Tilts';
 import { Geometry } from './components/tabs/Geometry';
@@ -13,13 +13,15 @@ import { Preflight } from './components/tabs/Preflight';
 import { Params } from './components/tabs/Params';
 import { Gcs } from './components/tabs/Gcs';
 import { LogAnalysis } from './components/tabs/LogAnalysis';
+import { RtkSetup } from './components/tabs/RtkSetup';
 
-// v9 P4: GCS / 飞行配置 (3 档) / 舵机标定 / 预检 / LOG 分析 / 参数
+// v9 P4: GCS / 飞行配置 / 舵机 / 预检 / RTK / LOG 分析 / 参数
 const TABS = [
   { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
   { id: 'profile',   label: '飞行配置',     Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
   { id: 'preflight', label: '预检',         Icon: PlayCircle },
+  { id: 'rtk',       label: 'RTK',          Icon: Satellite },
   { id: 'loganalysis', label: 'LOG 分析',   Icon: FileSearch },
   { id: 'params',    label: '参数',         Icon: Settings },
 ];
@@ -68,7 +70,7 @@ export default function App() {
   useEffect(() => {
     if (liveThrCap == null) return;
     if (lastThrCap.current !== null && lastThrCap.current !== liveThrCap) {
-      const map: Record<string,string> = { IDLE:'0% (停机)', CHECK:'30% (地检)', TEST:'60% (地测)' };
+      const map: Record<string,string> = { IDLE:'100% (真飞不限幅)', CHECK:'30% (地检)', TEST:'33% (台架)' };
       setToast(`油门限幅 → ${liveThrCap} (${map[liveThrCap] || ''})`);
       setTimeout(() => setToast(null), 5000);
     }
@@ -163,6 +165,7 @@ export default function App() {
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry currentK={currentK} />;
       case 'preflight': return <Preflight />;
+      case 'rtk':       return <RtkSetup />;
       case 'loganalysis': return <LogAnalysis />;
       case 'params':    return <Params />;
       default: return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
@@ -190,15 +193,15 @@ export default function App() {
         <span className="val-mono">
           油门限幅(ch6) <b className={
             liveThrCap === null ? 'text-fg-dim'
-            : liveThrCap === 'IDLE' ? 'text-err'
+            : liveThrCap === 'IDLE' ? 'text-ok'
             : liveThrCap === 'CHECK' ? 'text-warn'
-            : 'text-ok'
+            : 'text-warn'
           }>
             {liveThrCap ?? '— (无 RC)'}
           </b>
           {liveThrCap && (
             <span className="text-fg-dim ml-1">
-              ({liveThrCap === 'IDLE' ? '0% 停机' : liveThrCap === 'CHECK' ? '30% 地检' : '60% 地测'})
+              ({liveThrCap === 'IDLE' ? '100% 真飞' : liveThrCap === 'CHECK' ? '30% 地检' : '33% 台架'})
             </span>
           )}
         </span>
@@ -237,10 +240,10 @@ export default function App() {
             <span className={
               'chip text-[10px] ' +
               (liveThrCap === null ? ''
-                : liveThrCap === 'IDLE' ? 'chip-active text-err'
+                : liveThrCap === 'IDLE' ? 'chip-active text-ok'
                 : liveThrCap === 'CHECK' ? 'chip-active text-warn'
-                : 'chip-active text-ok')
-            } title={liveThrCap === null ? '无 RC ch6' : liveThrCap === 'IDLE' ? '0% 停机' : liveThrCap === 'CHECK' ? '30% 地检' : '60% 地测'}>
+                : 'chip-active text-warn')
+            } title={liveThrCap === null ? '无 RC ch6' : liveThrCap === 'IDLE' ? '100% 真飞 (不限幅)' : liveThrCap === 'CHECK' ? '30% 地检' : '33% 台架'}>
               {liveThrCap ?? '— (无 RC)'}
             </span>
           </StatBox>

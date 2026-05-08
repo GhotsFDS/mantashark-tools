@@ -17,6 +17,11 @@ export type GcsMessage =
   | { type: 'log_analysis_done'; data?: any; error?: string }
   | { type: 'pid_apply_done'; count: number }
   | { type: 'pid_apply_err'; name: string; err: string }
+  | { type: 'rtk_status'; connected?: boolean; port?: string; baud?: number; svin_started?: boolean; min_dur?: number; acc_mm?: number; injecting?: boolean; fixed_pos_started?: boolean; lat?: number; lon?: number; alt?: number; ntrip?: boolean; host?: string; mountpoint?: string; note?: string; error?: string }
+  | { type: 'rtk_svin'; dur: number; acc_mm: number; obs: number; valid: boolean; active: boolean }
+  | { type: 'rtk_inject'; frames: number; bytes: number; msg_types: Record<string, number>; bps_in?: number; bps_useful?: number }
+  | { type: 'rtk_ports'; ports?: { device: string; description: string; manufacturer: string; vid: number | null; pid: number | null }[]; error?: string }
+  | { type: 'rtk_sourcetable'; entries?: { mountpoint: string; identifier: string; format: string; format_details: string; carrier: string; nav_system: string; country: string }[]; error?: string }
   | { type: 'error'; msg: string };
 
 type Listener = (m: GcsMessage) => void;
@@ -103,6 +108,23 @@ export class GcsClient {
   // v9 P4: 批量应用 PID 建议 (前端必须先 disarmed + 双确认 + 备份)
   applyPids(params: Record<string, number>) {
     this.send({ type: 'pid_apply', params });
+  }
+  // v9 P4 RTK: 9PS Survey-In + RTCM 注入控制
+  rtkListPorts() { this.send({ type: 'rtk_list_ports' }); }
+  rtkConnect(port: string, baud = 115200) { this.send({ type: 'rtk_connect', port, baud }); }
+  rtkDisconnect() { this.send({ type: 'rtk_disconnect' }); }
+  rtkSurveyStart(min_dur = 60, acc_mm = 2500) { this.send({ type: 'rtk_survey_start', min_dur, acc_mm }); }
+  rtkSurveyStop() { this.send({ type: 'rtk_survey_stop' }); }
+  rtkInject(on: boolean) { this.send({ type: 'rtk_inject', on }); }
+  rtkFixedPos(lat: number, lon: number, alt: number, acc_mm = 100) {
+    this.send({ type: 'rtk_fixed_pos', lat, lon, alt, acc_mm });
+  }
+  rtkNtripConnect(host: string, port: number, mountpoint: string, user = '', password = '', v1 = false) {
+    this.send({ type: 'rtk_ntrip_connect', host, port, mountpoint, user, password, v1 });
+  }
+  rtkNtripDisconnect() { this.send({ type: 'rtk_ntrip_disconnect' }); }
+  rtkNtripSourcetable(host: string, port: number) {
+    this.send({ type: 'rtk_ntrip_sourcetable', host, port });
   }
 
   isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }

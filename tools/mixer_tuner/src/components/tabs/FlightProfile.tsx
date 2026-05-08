@@ -77,8 +77,14 @@ const FLIGHT_KEYS: string[] = [
   'MSK_VMIX_EN','MSK_VMIX_TAU','MSK_VMIX_LO','MSK_VMIX_MID','MSK_VMIX_HI',
   // v9 P4 实战 GROUP_BOOST (G3 PID 加速 demand 在 4 组分配权重)
   'MSK_BST_KS','MSK_BST_KDF','MSK_BST_KT','MSK_BST_KRD',
-  // v9 P4 实战 G3 油门杆 → V_TGT 范围 (ch3=1100→V_MIN, ch3=1900→V_MAX)
-  'MSK_V_MIN','MSK_V_MAX',
+  // v9 P4 实战 G3 速度控制 (设计 X): ch10 旋钮 + 加速度命令
+  'MSK_V_MIN','MSK_V_MAX','MSK_V_DRIVE_MIN','MSK_V_ACC_MAX','MSK_V_DEADZONE',
+  // v9 P4 修关键: DF tilt ATC 系数 + Layer 2 emergency 阈值
+  'MSK_FB_P_SC_DF','MSK_P_EMRG_DEG',
+  // v9 P4 暴露之前硬编码 (Layer 阈值/积分/ramp/drift)
+  'MSK_BST_SAT_HI','MSK_BST_SAT_LO','MSK_V_INT_LIM','MSK_G3_RAMP_MS','MSK_DRFT_TIME',
+  // v9 P4 副表 MSK2_ (drift 学率 + dead zone + ramp)
+  'MSK2_DRFT_DZ','MSK2_DRFT_KS_R','MSK2_DRFT_KDF_R','MSK2_DRFT_KT_R','MSK2_DRFT_KRD_R','MSK2_KRAMP_MS',
 ];
 
 export function FlightProfile() {
@@ -352,10 +358,24 @@ export function FlightProfile() {
           </div>
           <div>
             <div className="label mb-1">Pitch scale (P_SC)</div>
-            <NumInput value={params.MSK_FB_P_SC ?? 5} min={0} max={30} step={0.5}
+            <NumInput value={params.MSK_FB_P_SC ?? 5} min={0} max={100} step={0.5}
                       onCommit={v => setLocal('MSK_FB_P_SC', v)}
                       className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">SGRP+RD pitch 反馈 °/unit</div>
+            <div className="text-[9px] text-fg-mute mt-0.5">SGRP+RD pitch 反馈 °/unit (飞行 50)</div>
+          </div>
+          <div>
+            <div className="label mb-1">DF Pitch scale (P_SC_DF)</div>
+            <NumInput value={params.MSK_FB_P_SC_DF ?? 75} min={0} max={200} step={1}
+                      onCommit={v => setLocal('MSK_FB_P_SC_DF', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">DF 优先 1.5× P_SC (主抬头)</div>
+          </div>
+          <div>
+            <div className="label mb-1">Emergency thresh (°)</div>
+            <NumInput value={params.MSK_P_EMRG_DEG ?? 1.5} min={0.1} max={10} step={0.1}
+                      onCommit={v => setLocal('MSK_P_EMRG_DEG', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">pitch 偏 target ≥ 这值 ATC 抢 S/RD</div>
           </div>
           <div>
             <div className="label mb-1">Roll scale (R_SC)</div>
@@ -414,12 +434,101 @@ export function FlightProfile() {
             <div className="text-[9px] text-fg-mute mt-0.5">0=关, 0.005-0.02=学习</div>
           </div>
         </div>
+        <div className="grid grid-cols-5 gap-3 mt-3">
+          <div>
+            <div className="label mb-1">BST_SAT_HI</div>
+            <NumInput value={params.MSK_BST_SAT_HI ?? 0.95} min={0.5} max={1.0} step={0.01}
+                      onCommit={v => setLocal('MSK_BST_SAT_HI', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">Layer 1→2 进入</div>
+          </div>
+          <div>
+            <div className="label mb-1">BST_SAT_LO</div>
+            <NumInput value={params.MSK_BST_SAT_LO ?? 0.85} min={0.5} max={1.0} step={0.01}
+                      onCommit={v => setLocal('MSK_BST_SAT_LO', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">退出 hysteresis</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_INT_LIM</div>
+            <NumInput value={params.MSK_V_INT_LIM ?? 10} min={1} max={50} step={0.5}
+                      onCommit={v => setLocal('MSK_V_INT_LIM', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">PID I 项 cap</div>
+          </div>
+          <div>
+            <div className="label mb-1">G3_RAMP_MS</div>
+            <NumInput value={params.MSK_G3_RAMP_MS ?? 1500} min={0} max={5000} step={100}
+                      onCommit={v => setLocal('MSK_G3_RAMP_MS', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">G2→G3 ramp ms</div>
+          </div>
+          <div>
+            <div className="label mb-1">DRFT_TIME (s)</div>
+            <NumInput value={params.MSK_DRFT_TIME ?? 5} min={0.5} max={30} step={0.5}
+                      onCommit={v => setLocal('MSK_DRFT_TIME', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">drift 学习触发持续 s</div>
+          </div>
+        </div>
         <div className="mt-2 text-[9px] text-fg-mute leading-snug">
-          <b>Layer 1</b>: KT 单独加输出 (kt_eff &lt; KT_LIM). 不破坏姿态. <b>Layer 2</b>: KT 撞限 →
-          SGRP/RDL/RDR 慢调朝 90° 改平 (Mutex 锁 ATC pitch 反馈, ATC 自动加 KS 维持 pitch).
+          <b>Layer 1</b>: boost &lt; SAT_HI, mixer 加法 (KS/KT/KRD 按 BST 比例). <b>Layer 2</b>: boost ≥ SAT_HI, _l2_offset 朝 90° 改平 SGRP/RDL/RDR.
           <b>Layer 3</b>: 倾转撞机械限位 = 飞机能力极限, 仅 STATUSTEXT 警告.
-          <b>P3.7 K_drift</b>: 1Hz 学习 motors:get_pitch 持续 5s+ → 慢加 KS/KDF drift (lua 内部, 不写 EEPROM).
-          切档/退出 G3 清零. 飞行后看 LOG MSK3.KSD/KDD 决定是否调 K_base.
+          <b>Emergency 阈值</b>: pitch 偏 target ≥ P_EMRG_DEG 时让 Layer 2 退回 Layer 1 (姿态优先).
+          <b>K_drift</b>: pitch_in 出死区持续 DRFT_TIME 秒 → 慢加 K_drift (lua 内部, 不写 EEPROM).
+        </div>
+      </div>
+
+      {/* v9 P4 副表 MSK2_ — drift 学率因子 + dead zone + K ramp */}
+      <div className="card">
+        <div className="card-title">drift 学习参数 (MSK2_ 副表)</div>
+        <div className="grid grid-cols-6 gap-3">
+          <div>
+            <div className="label mb-1">DRFT_DZ</div>
+            <NumInput value={params.MSK2_DRFT_DZ ?? 0.2} min={0} max={1} step={0.01}
+                      onCommit={v => setLocal('MSK2_DRFT_DZ', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">pitch_in 死区</div>
+          </div>
+          <div>
+            <div className="label mb-1">DRFT_KS_R</div>
+            <NumInput value={params.MSK2_DRFT_KS_R ?? 1.0} min={0} max={2} step={0.05}
+                      onCommit={v => setLocal('MSK2_DRFT_KS_R', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">KS 学率因子</div>
+          </div>
+          <div>
+            <div className="label mb-1">DRFT_KDF_R</div>
+            <NumInput value={params.MSK2_DRFT_KDF_R ?? 0.5} min={0} max={2} step={0.05}
+                      onCommit={v => setLocal('MSK2_DRFT_KDF_R', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">KDF 学率因子</div>
+          </div>
+          <div>
+            <div className="label mb-1">DRFT_KT_R</div>
+            <NumInput value={params.MSK2_DRFT_KT_R ?? 0.3} min={0} max={2} step={0.05}
+                      onCommit={v => setLocal('MSK2_DRFT_KT_R', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">KT 学率因子</div>
+          </div>
+          <div>
+            <div className="label mb-1">DRFT_KRD_R</div>
+            <NumInput value={params.MSK2_DRFT_KRD_R ?? 0.0} min={0} max={2} step={0.05}
+                      onCommit={v => setLocal('MSK2_DRFT_KRD_R', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">KRD 反向学率 (默认 0)</div>
+          </div>
+          <div>
+            <div className="label mb-1">KRAMP_MS</div>
+            <NumInput value={params.MSK2_KRAMP_MS ?? 1000} min={0} max={5000} step={50}
+                      onCommit={v => setLocal('MSK2_KRAMP_MS', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">vmix=0 K ramp ms</div>
+          </div>
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          <b>因子物理</b>: KS 主升力 → 1.0 (全速学); KDF 主姿态 → 0.5 (半速); KT 跟 G3 boost 撞 → 0.3 (抑); KRD 后部斜下吹 sign 反向 → 0.0 默认关 (打开 = 飞行员看 LOG 确定 KRD 不跟 boost 撞后改 0.5).
+          <b>KRAMP_MS</b> 仅 vmix=0 (P3.10 离散三档) 切档用; vmix=1 (P4 默认) 走 set_alpha 连续插值, 不触发.
         </div>
       </div>
 
@@ -455,24 +564,56 @@ export function FlightProfile() {
                       className="input val-mono w-full" />
             <div className="text-[9px] text-fg-mute mt-0.5">RD 副推+尾控</div>
           </div>
+        </div>
+        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
+          <b>GROUP_BOOST</b>: G3 PID 速度 demand 在 4 组分配权重. K = (K_base + drift + boost × BST_K) × cap.
+        </div>
+      </div>
+
+      {/* v9 P4 实战 设计 X: G3 速度控制 ch10 旋钮 */}
+      <div className="card">
+        <div className="card-title">G3 速度控制 (设计 X) — ch10 旋钮命令加速度, ch3 lua 锁满</div>
+        <div className="grid grid-cols-5 gap-3">
           <div>
             <div className="label mb-1">V_MIN (m/s)</div>
             <NumInput value={params.MSK_V_MIN ?? 5.0} min={0} max={30} step={0.1}
                       onCommit={v => setLocal('MSK_V_MIN', v)}
                       className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">ch3=1100 时 V_TGT</div>
+            <div className="text-[9px] text-fg-mute mt-0.5">V_TGT 下限</div>
           </div>
           <div>
             <div className="label mb-1">V_MAX (m/s)</div>
             <NumInput value={params.MSK_V_MAX ?? 14.0} min={0} max={30} step={0.1}
                       onCommit={v => setLocal('MSK_V_MAX', v)}
                       className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">ch3=1900 时 V_TGT</div>
+            <div className="text-[9px] text-fg-mute mt-0.5">V_TGT 上限</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_DRIVE_MIN</div>
+            <NumInput value={params.MSK_V_DRIVE_MIN ?? 9.0} min={0} max={30} step={0.1}
+                      onCommit={v => setLocal('MSK_V_DRIVE_MIN', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">G3 入档兜底 (破驼峰)</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_ACC_MAX (m/s²)</div>
+            <NumInput value={params.MSK_V_ACC_MAX ?? 2.0} min={0} max={10} step={0.1}
+                      onCommit={v => setLocal('MSK_V_ACC_MAX', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">ch10 满杆加速度</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_DEADZONE (PWM)</div>
+            <NumInput value={params.MSK_V_DEADZONE ?? 50} min={0} max={200} step={1}
+                      onCommit={v => setLocal('MSK_V_DEADZONE', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">ch10 中位死区 (维持)</div>
           </div>
         </div>
         <div className="mt-2 text-[9px] text-fg-mute leading-snug">
-          <b>GROUP_BOOST</b>: G3 PID 速度 demand 在 4 组分配权重. K = (K_base + drift + boost × BST_K) × cap.
-          推杆=想更快 → V_TGT 升 + ATC throttle 升 + PID 拉 boost. 飞行员控制感: 杆位 = 目标速度.
+          <b>设计 X</b>: G3 进入瞬间 V_TGT_init = max(V_actual, V_DRIVE_MIN). 之后 ch10 旋钮:
+          中位 ±DEADZONE → V_TGT 维持; 出杆 → V_TGT 累加 ±ACC_MAX m/s². ch3 lua 强制 override 1900,
+          ATC throttle 锁满, motor PWM 完全由 K (含 PID boost) 决定. <b>一个杆一件事</b>, 不冲突.
         </div>
       </div>
 
