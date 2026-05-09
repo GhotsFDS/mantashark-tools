@@ -30,9 +30,12 @@ hiddenimports += [
     'rtk',
 ]
 
+# PyInstaller 跑 spec 时 cwd 是 spec 文件所在目录. 但 Analysis 默认不
+# 把这个目录加进 module 搜索路径. 必须用 pathex=['.'] 显式给, hiddenimports
+# 里的 log_analysis/rtk 才能解析到同目录 .py.
 a = Analysis(
     ['mavbridge.py'],
-    pathex=[],
+    pathex=['.'],   # 让 PyInstaller 在 spec 目录找本地 .py (log_analysis, rtk)
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,
