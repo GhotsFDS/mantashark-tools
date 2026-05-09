@@ -25,6 +25,9 @@ hiddenimports += [
     'pymavlink.dialects.v20.ardupilotmega',
     'pymavlink.dialects.v20.all',
     'pkg_resources',
+    # 同目录本地模块 (PyInstaller 不会自动打包 import xxx 语法的本地 .py)
+    'log_analysis',
+    'rtk',
 ]
 
 a = Analysis(
