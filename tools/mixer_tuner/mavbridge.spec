@@ -37,7 +37,14 @@ a = Analysis(
     ['mavbridge.py'],
     pathex=['.'],   # 让 PyInstaller 在 spec 目录找本地 .py (log_analysis, rtk)
     binaries=[],
-    datas=[],
+    datas=[
+        # 关键: 直接把 .py 当 data 嵌入 EXE bundle (运行时在 sys._MEIPASS).
+        # 比 hiddenimports 可靠 — PyInstaller 6.x 对顶层非包模块 hiddenimport
+        # 有时静默跳过 (build log 看不到 'Analyzing hidden import log_analysis').
+        # mavbridge.py 启动时把 sys._MEIPASS 加进 sys.path 让 import 能找到.
+        ('log_analysis.py', '.'),
+        ('rtk.py', '.'),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

@@ -41,6 +41,11 @@ import threading
 from contextlib import suppress
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# PyInstaller frozen EXE: __file__ 指向 PyInstaller 虚拟路径, 真正的 .py
+# 资源 (datas 嵌入的 log_analysis.py / rtk.py) 在 sys._MEIPASS 临时目录里.
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    if sys._MEIPASS not in sys.path:
+        sys.path.insert(0, sys._MEIPASS)
 VENV_SITE = os.path.normpath(os.path.join(SCRIPT_DIR, '..', '..', 'sim', '.venv', 'lib', 'python3.12', 'site-packages'))
 if os.path.isdir(VENV_SITE) and VENV_SITE not in sys.path:
     sys.path.insert(0, VENV_SITE)
