@@ -75,14 +75,14 @@ jobs:
           }
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: analyze_log-windows
           path: tools/log_analyzer/dist/analyze_log.exe
           retention-days: 30
 
       - name: Upload Web artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: analyze_log_web-windows
           path: tools/log_analyzer/dist/analyze_log_web.exe
@@ -137,14 +137,14 @@ jobs:
             web_analyzer.py
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: analyze_log-linux
           path: tools/log_analyzer/dist/analyze_log
           retention-days: 30
 
       - name: Upload Web artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: analyze_log_web-linux
           path: tools/log_analyzer/dist/analyze_log_web
