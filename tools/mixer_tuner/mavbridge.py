@@ -461,6 +461,14 @@ class Bridge:
                     # 显式停 (timeout=0 立即结束)
                     self.mav.mav.command_long_send(self._sys, self._comp, 209, 0,
                                                     1, 1, 0, 0, 0, 0, 0)
+                elif t == 'set_mode':
+                    # v9 P7: 切 ArduPilot custom mode (WIG_AUTO=27 / WIG_RECV=29 / QSTAB=17)
+                    # MAV_CMD_DO_SET_MODE = 176, p1 = base_mode, p2 = custom_mode
+                    # base_mode 必须含 MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
+                    mode_id = int(req.get('mode', 17))
+                    base_mode = mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
+                    self.mav.mav.command_long_send(self._sys, self._comp, 176, 0,
+                                                    base_mode, mode_id, 0, 0, 0, 0, 0)
                 elif t == 'analyze_log':
                     # v9 P4: BIN 离线分析 (CPU-bound, 走 thread executor 不阻塞 WS)
                     if _analyze_log is None:

@@ -5,22 +5,22 @@ import { gcs, GcsMessage } from './lib/gcs';
 import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
 import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
-import { Waves, Sliders, Grid3x3, PlayCircle, Settings, PlugZap, FileSearch, Satellite } from 'lucide-react';
+import { Waves, Sliders, Grid3x3, Settings, PlugZap, FileSearch, Satellite, Bot } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
 import { Tilts } from './components/tabs/Tilts';
 import { Geometry } from './components/tabs/Geometry';
-import { Preflight } from './components/tabs/Preflight';
 import { Params } from './components/tabs/Params';
 import { Gcs } from './components/tabs/Gcs';
 import { LogAnalysis } from './components/tabs/LogAnalysis';
 import { RtkSetup } from './components/tabs/RtkSetup';
+import { Auto } from './components/tabs/Auto';
 
-// v9 P4: GCS / 飞行配置 / 舵机 / 预检 / RTK / LOG 分析 / 参数
+// v9 P7: GCS / Auto / 飞行配置 / 舵机标定 / RTK / LOG 分析 / 参数
 const TABS = [
   { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
+  { id: 'auto',      label: 'Auto',         Icon: Bot },
   { id: 'profile',   label: '飞行配置',     Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
-  { id: 'preflight', label: '预检',         Icon: PlayCircle },
   { id: 'rtk',       label: 'RTK',          Icon: Satellite },
   { id: 'loganalysis', label: 'LOG 分析',   Icon: FileSearch },
   { id: 'params',    label: '参数',         Icon: Settings },
@@ -161,10 +161,10 @@ export default function App() {
   const panel = (() => {
     switch (currentTab) {
       case 'gcs':       return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
+      case 'auto':      return <Auto />;
       case 'profile':   return <FlightProfile effectiveSpeed={effectiveSpeed} currentK={currentK} />;
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry currentK={currentK} />;
-      case 'preflight': return <Preflight />;
       case 'rtk':       return <RtkSetup />;
       case 'loganalysis': return <LogAnalysis />;
       case 'params':    return <Params />;
@@ -223,7 +223,7 @@ export default function App() {
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded bg-gradient-to-br from-accent to-ks flex items-center justify-center text-bg font-bold">M</div>
           <div>
-            <div className="text-[13px] font-semibold text-fg">MantaShark Mixer Tuner</div>
+            <div className="text-[13px] font-semibold text-fg">MantaShark 地面站</div>
             <div className="text-[10px] text-fg-dim">v9.0 · ArduPlane · 12 EDF + 7 tilt · PCHIP</div>
           </div>
         </div>

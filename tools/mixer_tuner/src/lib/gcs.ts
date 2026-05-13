@@ -100,6 +100,8 @@ export class GcsClient {
     this.send({ type: 'motor_test', motor, value: throttlePct, timeout: timeoutSec });
   }
   motorTestStop() { this.send({ type: 'motor_test_stop' }); }
+  // v9 P7: 切 ArduPilot custom mode (WIG_AUTO=27 / WIG_RECV=29 / QSTAB=17)
+  setMode(mode: number) { this.send({ type: 'set_mode', mode }); }
   ping()      { this.send({ type: 'ping' }); }
   // v9 P4: BIN 离线分析 (本地路径, mavbridge.py 用 pymavlink 解析)
   analyzeLog(path: string, currentParams: Record<string, number>) {

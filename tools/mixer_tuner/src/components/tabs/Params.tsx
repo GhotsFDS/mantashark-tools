@@ -184,7 +184,7 @@ export function Params() {
         <div className="text-[11px] text-fg-mute leading-relaxed">
           ch6 切档时 main.lua 自动写参数:
           <ul className="list-disc ml-5 mt-1">
-            <li><b>IDLE / CHECK</b> → 飞行预设 (Q_A_ANG_RLL_P=4.5 / RAT_*_P=0.135 / ANGLE_MAX=10° / FB_SC=5)</li>
+            <li><b>FLY / CHECK</b> → 飞行预设 (Q_A_ANG_RLL_P=4.5 / RAT_*_P=0.135 / ANGLE_MAX=10° / FB_SC=5)</li>
             <li><b>TEST</b> → 地测预设 (Q_A_ANG_RLL_P=8 / RAT_*_P=0.4 / ANGLE_MAX=30° / FB_SC=25)</li>
           </ul>
           <span className="text-fg-dim block mt-1">不需手动按钮. STATUSTEXT 显示 "MSK 预设 -&gt; 飞行/地测". 实飞前 ch6 别拨到 TEST 即可.</span>

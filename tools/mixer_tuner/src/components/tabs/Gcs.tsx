@@ -107,6 +107,68 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
 
   // v9 P3.9: ch6 TEST (PWM>1700) 时全组 K 统一 = MSK_THR_TEST (跟 lua mixer.set_test_unified 一致)
   const ch6Pwm = liveRcCh ? (liveRcCh[5] ?? 1500) : 1500;
+
+  // ─── pitch 目标 + 偏差 (v9 P6: 区分 base_pitch + stick + 偏差) ───
+  // 真实目标 body pitch = Q_TRIM_PITCH(base) + stick × MIN(PTCH_LIM, Q_A_ANGLE_MAX) (mode_qstabilize.cpp:96-100)
+  //   - base: MSK_BPCH_G<gear> 静态 (vmix 时三段插值)
+  //   - stick: ch2 (pitch stick) × MIN(PTCH_LIM_MAX/-PTCH_LIM_MIN, Q_A_ANGLE_MAX)
+  // 偏差 ΔP = actual_pitch − (base + stick), 染色阈值 ±MSK_P_EMRG_DEG
+  const ch7Pwm = liveRcCh ? (liveRcCh[6] ?? 1500) : 1500;
+  const ch2Pwm = liveRcCh ? (liveRcCh[1] ?? 1500) : 1500;
+  const vmixEn = (params.MSK_VMIX_EN ?? 1) >= 0.5;
+  const pitchBase = useMemo(() => {
+    const bp1 = params.MSK_BPCH_G1 ?? 5;
+    const bp2 = params.MSK_BPCH_G2 ?? 11;
+    const bp3 = params.MSK_BPCH_G3 ?? 8;
+    if (vmixEn && liveSpd != null) {
+      const vLo  = params.MSK_VMIX_LO  ?? 3.0;
+      const vMid = params.MSK_VMIX_MID ?? 6.5;
+      const vHi  = params.MSK_VMIX_HI  ?? 10.0;
+      let alpha;
+      if (liveSpd <= vLo) alpha = 0;
+      else if (liveSpd <= vMid) alpha = 0.5 * (liveSpd - vLo) / Math.max(vMid - vLo, 0.1);
+      else if (liveSpd <= vHi) alpha = 0.5 + 0.5 * (liveSpd - vMid) / Math.max(vHi - vMid, 0.1);
+      else alpha = 1;
+      if (ch7Pwm < 1300) alpha = 0;
+      else if (ch7Pwm > 1700) alpha = 1;
+      if (alpha < 0.5) return (1 - 2*alpha) * bp1 + (2*alpha) * bp2;
+      else return (2 - 2*alpha) * bp2 + (2*alpha - 1) * bp3;
+    }
+    return liveGearLocal === 1 ? bp1 : liveGearLocal === 2 ? bp2 : bp3;
+  }, [vmixEn, liveSpd, liveGearLocal, ch7Pwm,
+      params.MSK_BPCH_G1, params.MSK_BPCH_G2, params.MSK_BPCH_G3,
+      params.MSK_VMIX_LO, params.MSK_VMIX_MID, params.MSK_VMIX_HI]);
+
+  const pitchStick = useMemo(() => {
+    // stick_input = (pwm-1500)/500, [-1, +1]
+    const stickIn = (ch2Pwm - 1500) / 500;
+    // mode_qstabilize.cpp:96-100 — 正/负 stick 各看 PTCH_LIM_MAX / -PTCH_LIM_MIN, 跟 Q_A_ANGLE_MAX 取小
+    // Q_A_ANGLE_MAX 在 AC_AttitudeControl::lean_angle_max_cd 内 clamp [5°, 80°]
+    const qAngleMax = Math.max(5, Math.min(80, params.Q_A_ANGLE_MAX ?? 15));
+    const ptchMax = params.PTCH_LIM_MAX_DEG ?? 5;
+    const ptchMin = params.PTCH_LIM_MIN_DEG ?? -5;
+    const limit = stickIn >= 0
+      ? Math.min(ptchMax, qAngleMax)
+      : Math.min(-ptchMin, qAngleMax);
+    return stickIn * limit;
+  }, [ch2Pwm, params.Q_A_ANGLE_MAX, params.PTCH_LIM_MAX_DEG, params.PTCH_LIM_MIN_DEG]);
+
+  // MAVLink ATTITUDE.pitch 在 Quadplane VTOL view 模式下 = view.pitch = ahrs.pitch − Q_TRIM_PITCH
+  // (ArduPlane GCS_MAVLink_Plane.cpp:144-148, show_vtol_view() 为 true 时用 ahrs_view->pitch)
+  // 所以加回 pitchBase (= Q_TRIM_PITCH ramp 后值) 才是真实 body 绝对角度
+  const pitchTargetFull = pitchBase + pitchStick;
+  const pitchView = tlm.attitude?.pitch;       // view frame, 已减 Q_TRIM_PITCH
+  const pitchActual = (pitchView !== undefined) ? (pitchView + pitchBase) : undefined;
+  // ΔP = actual_body - target_body = view - stick (相同结果两种表达, view frame 等价)
+  const pitchErr = (pitchView !== undefined) ? (pitchView - pitchStick) : undefined;
+  const pEmrg = params.MSK_P_EMRG_DEG ?? 1.5;
+  const pitchErrColor: 'ok'|'warn'|'err'|undefined = (pitchErr === undefined) ? undefined
+    : Math.abs(pitchErr) >= pEmrg ? 'err'
+    : Math.abs(pitchErr) >= pEmrg / 2 ? 'warn'
+    : 'ok';
+  // Tgt 始终显示 "base+stick" 拆解格式 (即使 stick=0 也显示 "+0.0°")
+  const pitchTgtDisplay = pitchBase.toFixed(1) + '°' +
+    (pitchStick >= 0 ? '+' : '') + pitchStick.toFixed(1) + '°';
   const liveK: Record<GroupKey, number> = useMemo(() => {
     if (liveSpd == null) return currentK ?? { KS:0, KDF:0, KT:0, KRD:0 };
     if (ch6Pwm > 1700) {
@@ -155,8 +217,10 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
             <TlmCell label="Armed" val={armed ? 'ARMED' : 'OFF'} color={armed ? 'warn' : 'ok'} />
             <TlmCell label="GPS" val={tlm.gps ? `${tlm.gps.fix_type}/${tlm.gps.sats}★` : '—'} />
             <TlmCell label="HDOP" val={tlm.gps && tlm.gps.hdop !== null ? tlm.gps.hdop.toFixed(1) : '—'} />
-            <TlmCell label="Pitch" val={tlm.attitude ? tlm.attitude.pitch.toFixed(0)+'°' : '—'} />
-            <TlmCell label="Roll" val={tlm.attitude ? tlm.attitude.roll.toFixed(0)+'°' : '—'} />
+            <TlmCell label="Body"  val={pitchActual !== undefined ? pitchActual.toFixed(1)+'°' : '—'} />
+            <TlmCell label="View"  val={pitchView   !== undefined ? (pitchView>=0?'+':'')+pitchView.toFixed(1)+'°' : '—'} color={pitchErrColor} />
+            <TlmCell label="Tgt"   val={pitchTgtDisplay} />
+            <TlmCell label="Roll"  val={tlm.attitude ? tlm.attitude.roll.toFixed(0)+'°' : '—'} />
             <TlmCell label="地速" val={tlm.vfr ? tlm.vfr.groundspeed.toFixed(1) : '—'} highlight />
             <TlmCell label="油门" val={tlm.vfr ? tlm.vfr.throttle+'%' : '—'} />
           </div>
