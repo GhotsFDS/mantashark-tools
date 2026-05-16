@@ -24,11 +24,15 @@ export function TiltPanel({ t }: Props) {
   const dirKey  = `TLT_${t.alias}_DIR`;
   const lminKey = `TLT_${t.alias}_LMIN`;   // 偏移量下界 (任意, LMIN ≤ LMAX)
   const lmaxKey = `TLT_${t.alias}_LMAX`;   // 偏移量上界 (任意, 区间不一定跨 0)
+  const goalKey = `TLT_${t.alias}_GOAL`;   // ATC fb 静态中性位 (body abs deg)
+  const bwKey   = `TLT_${t.alias}_BW`;     // ATC fb 带宽倍率 (clamp [0.1, 5.0] in lua)
   const ovrKey  = `TLT_${t.alias}_PRV`;
   const zero = params[zeroKey];
   const dir = params[dirKey];
   const lminOff = params[lminKey] ?? -45;
   const lmaxOff = params[lmaxKey] ?? 45;
+  const goalAbs = params[goalKey] ?? 45;
+  const bw = params[bwKey] ?? 1.0;
   const perDeg = params.TLT_PWM_PER_DEG;
 
   // preview store 是 abs_deg
@@ -163,19 +167,29 @@ export function TiltPanel({ t }: Props) {
         </div>
       </div>
 
-      {/* 方向 (三态: +1 / 0 锁 / -1) + PER_DEG */}
-      <div className="grid grid-cols-2 gap-2 mt-3">
+      {/* 方向 (三态: +1 / 0 锁 / -1) + ATC fb 带宽 + PER_DEG */}
+      <div className="grid grid-cols-3 gap-2 mt-3">
         <div>
-          <div className="label mb-1">DIR (0=锁定永远 ZERO PWM)</div>
+          <div className="label mb-1">DIR (0=锁)</div>
           <div className="flex">
             <button className={'btn flex-1 rounded-r-none ' + (dir === 1 ? 'btn-primary' : '')}
-                    onClick={() => pushParam(dirKey, 1)}>+1 ↑</button>
+                    onClick={() => pushParam(dirKey, 1)}>+1</button>
             <button className={'btn flex-1 rounded-none border-l-0 border-r-0 ' + (dir === 0 ? 'btn-primary' : '')}
                     onClick={() => pushParam(dirKey, 0)}
-                    title="锁定: 不响应任何指令, PWM 永远 = ZERO (用于未校准舵机安全锁)">0 锁</button>
+                    title="锁定: 不响应任何指令, PWM 永远 = ZERO (用于未校准舵机安全锁)">0</button>
             <button className={'btn flex-1 rounded-l-none ' + (dir === -1 ? 'btn-primary' : '')}
-                    onClick={() => pushParam(dirKey, -1)}>−1 ↓</button>
+                    onClick={() => pushParam(dirKey, -1)}>−1</button>
           </div>
+        </div>
+        <div>
+          <div className="label mb-1" title="ATC fb 带宽倍率: target = goal + signed_fb × BW × swing / po_norm. lua clamp [0.1, 5.0]">BW (ATC 灵敏度)</div>
+          <input type="number" min={0.1} max={5.0} step={0.1}
+                 value={bw}
+                 onChange={e => {
+                   const v = parseFloat(e.target.value);
+                   if (!isNaN(v) && v >= 0.1 && v <= 5.0) pushParam(bwKey, v);
+                 }}
+                 className={'input w-full val-mono ' + (bw > 5.0 ? 'ring-1 ring-warn rounded' : '')} />
         </div>
         <div>
           <div className="label mb-1">μs/°</div>
@@ -217,6 +231,32 @@ export function TiltPanel({ t }: Props) {
           实际 abs 工作范围 [{TILT_NEUTRAL_ABS_DEG + lminOff}, {TILT_NEUTRAL_ABS_DEG + lmaxOff}]°
           {(lminOff > 0 || lmaxOff < 0) && <span className="text-accent ml-1">· 不含中立 45°</span>}
         </div>
+      </div>
+
+      {/* GOAL: ATC fb 静态中性位 (body abs angle, 期望 IDLE/CRUISE 时 servo 停的位置) */}
+      <div className="mt-3">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="label flex-1">GOAL (ATC 静态中性 body abs)</span>
+          <span className="val-mono text-[10px]">{goalAbs}°</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <div className="col-span-2">
+            <input type="range" min={0} max={135} step={1}
+                   value={goalAbs}
+                   onChange={e => pushParam(goalKey, parseInt(e.target.value))}
+                   className="slider w-full" />
+          </div>
+          <input type="number" min={0} max={135} step={1}
+                 value={goalAbs}
+                 onChange={e => {
+                   const v = parseInt(e.target.value);
+                   if (!isNaN(v) && v >= 0 && v <= 135) pushParam(goalKey, v);
+                 }}
+                 className="input w-full val-mono" />
+        </div>
+        {(goalAbs < TILT_NEUTRAL_ABS_DEG + lminOff || goalAbs > TILT_NEUTRAL_ABS_DEG + lmaxOff) && (
+          <div className="text-[9px] text-warn mt-0.5">⚠ GOAL 在软限位外, 会被 clamp 到 [{TILT_NEUTRAL_ABS_DEG + lminOff}, {TILT_NEUTRAL_ABS_DEG + lmaxOff}]°</div>
+        )}
       </div>
 
       {/* 预览滑杆 (主显 abs, 括号显示偏移量). 实际机械轴 0-135°, 全局开关在 Tilts 顶部. */}

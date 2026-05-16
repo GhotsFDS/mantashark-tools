@@ -2,7 +2,7 @@
 
 export type GcsMessage =
   | { type: 'status'; connected: boolean; sys?: number; comp?: number; device?: string }
-  | { type: 'heartbeat'; mode: string; armed: boolean }
+  | { type: 'heartbeat'; mode: string; custom_mode?: number; armed: boolean }
   | { type: 'attitude'; roll: number; pitch: number; yaw: number }
   | { type: 'vfr_hud'; airspeed: number; groundspeed: number; alt: number; climb: number; throttle: number }
   | { type: 'gps'; fix_type: number; sats: number; hdop: number | null; yaw_deg?: number | null; alt_m?: number; vel_mps?: number | null; gps_id?: number }
@@ -11,6 +11,7 @@ export type GcsMessage =
   | { type: 'statustext'; severity: number; text: string }
   | { type: 'rc'; channels: number[] }
   | { type: 'servo'; channels: number[] }
+  | { type: 'named_float'; name: string; value: number }
   | { type: 'battery'; voltage: number; current: number | null; remaining: number; consumed_mah?: number; fallback?: boolean }
   | { type: 'pong'; ts: number }
   | { type: 'log_analysis_progress'; pct: number; msg?: string }

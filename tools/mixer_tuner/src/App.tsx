@@ -1,9 +1,7 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useStore } from './store/useStore';
-import { evalCurve } from './lib/pchip';
 import { gcs, GcsMessage } from './lib/gcs';
 import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
-import type { GroupKey } from './lib/types';
 import { Wifi, WifiOff } from 'lucide-react';
 import { Waves, Sliders, Grid3x3, Settings, PlugZap, FileSearch, Satellite, Bot } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
@@ -14,76 +12,69 @@ import { Gcs } from './components/tabs/Gcs';
 import { LogAnalysis } from './components/tabs/LogAnalysis';
 import { RtkSetup } from './components/tabs/RtkSetup';
 import { Auto } from './components/tabs/Auto';
+import { GroundTest } from './components/tabs/GroundTest';
 
-// v9 P7: GCS / Auto / 飞行配置 / 舵机标定 / RTK / LOG 分析 / 参数
+// v9 P7.5: GCS / 模式配置 / 地面测试 / 控制律 / 舵机标定 / RTK / LOG 分析 / 参数
 const TABS = [
   { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
-  { id: 'auto',      label: 'Auto',         Icon: Bot },
-  { id: 'profile',   label: '飞行配置',     Icon: Waves },
+  { id: 'auto',      label: '模式配置',     Icon: Bot },
+  { id: 'gtest',     label: '地面测试',     Icon: Grid3x3 },
+  { id: 'profile',   label: '控制律',       Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
   { id: 'rtk',       label: 'RTK',          Icon: Satellite },
   { id: 'loganalysis', label: 'LOG 分析',   Icon: FileSearch },
   { id: 'params',    label: '参数',         Icon: Settings },
 ];
 
+// P7.8: ch6 走 ArduPlane FLTMODE_CH=6, lua 不读 ch6. mode 数字 = heartbeat.custom_mode
+const MODE_LABELS: Record<number, string> = {
+  17: 'MANUAL (QSTAB)',
+  27: 'AUTO (WIG_AUTO)',
+  29: 'RECV (WIG_RECV)',
+};
+const MODE_COLOR: Record<number, string> = {
+  17: 'text-ok',
+  27: 'text-accent',
+  29: 'text-err',
+};
+
 export default function App() {
-  const { currentTab, setTab, currentSpeed, currentGear, currentPhase, params, simulateArmed, setParam, setSimulateArmed } = useStore();
+  const { currentTab, setTab, params, setParam, setSimulateArmed } = useStore();
   const [gcsConnected, setGcsConnected] = useState(false);
   const [gcsArmed, setGcsArmed] = useState<boolean | null>(null);
   const [liveRc, setLiveRc] = useState<number[] | null>(null);
+  const [liveMode, setLiveMode] = useState<number | null>(null);
+  const [livePhase, setLivePhase] = useState<string>('—');
   const [toast, setToast] = useState<string | null>(null);
   // v9 P4 RTK 状态: GPS1 + GPS2 (双头 C-RTK2 HP)
   const [liveGps, setLiveGps] = useState<{ fix_type: number; sats: number; yaw_deg: number | null; vel_mps: number | null } | null>(null);
   const [liveGps2, setLiveGps2] = useState<{ fix_type: number; sats: number; yaw_deg: number | null } | null>(null);
 
-  // ─── v9 通道语义 (CLAUDE.md 权威):
-  //   ch7 g_mode 三档:  <1300 G1 慢滑 / 1300-1700 G2 抬头建气垫 / >1700 G3 巡航
-  //   ch6 thr_cap 三档: <1300 IDLE 0% / 1300-1700 CHECK 30% / >1700 TEST 60%
-  //   ch8 preflight 二态: >1700 + disarmed = 4 阶段地面预检
-  const liveGear = liveRc ? (() => {
-    const pwm = liveRc[6] ?? 1500;  // ch7 (1-indexed) = idx 6
-    return pwm < 1300 ? 1 : pwm < 1700 ? 2 : 3;
-  })() : null;
-  const liveThrCap = liveRc ? (() => {
-    const pwm = liveRc[5] ?? 1500;  // ch6 = idx 5
-    return pwm < 1300 ? 'IDLE' : pwm < 1700 ? 'CHECK' : 'TEST';
-  })() : null;
-  // v9 P3.9: 预检触发改为 ch6 中档 (CHECK) + disarmed (跟 thr_cap 共位)
-  const livePreflight = liveRc ? (liveThrCap === 'CHECK' && gcsArmed === false) : null;
+  // P7.8 拨杆解码 (mode 走 heartbeat.custom_mode, ch7 语义跟 mode 走)
   // ch12 二档开关 = ArduPlane GPS RTL 紧急返航 (RCx_OPTION = 4 RTL, ArduPlane 自带, 不走 lua)
   const liveRtl = liveRc ? (liveRc[11] ?? 1500) > 1700 : null;
+  const livePreflight = liveRc ? ((liveRc[7] ?? 1500) > 1700 && gcsArmed === false) : null;
+  const ch7Label = (() => {
+    if (!liveRc || liveMode == null) return null;
+    const pwm = liveRc[6] ?? 1500;
+    const tier = pwm < 1300 ? 'low' : pwm <= 1700 ? 'mid' : 'high';
+    if (liveMode === 17) return tier === 'low' ? 'TAXI' : tier === 'mid' ? 'TRANS' : 'CRUISE';
+    if (liveMode === 27) return (tier === 'low' ? 'MATRIX' : tier === 'mid' ? 'TURN' : 'CRUISE');
+    return '—';
+  })();
 
-  // 切换提示 (toast)
-  const lastGear    = useRef<number | null>(null);
-  const lastThrCap  = useRef<string | null>(null);
-  const lastChk     = useRef<boolean | null>(null);
-  const lastRtl     = useRef<boolean | null>(null);
+  // 切换提示 (toast) — mode / phase / RTL / preflight
+  const lastMode = useRef<number | null>(null);
+  const lastRtl  = useRef<boolean | null>(null);
+  const lastChk  = useRef<boolean | null>(null);
   useEffect(() => {
-    if (liveGear == null) return;
-    if (lastGear.current !== null && lastGear.current !== liveGear) {
-      const lbl = liveGear === 1 ? 'G1 慢滑' : liveGear === 2 ? 'G2 抬头建气垫' : 'G3 巡航';
-      setToast(`档位切换 → ${lbl}`);
+    if (liveMode == null) return;
+    if (lastMode.current !== null && lastMode.current !== liveMode) {
+      setToast(`Mode 切换 → ${MODE_LABELS[liveMode] || liveMode}`);
       setTimeout(() => setToast(null), 5000);
     }
-    lastGear.current = liveGear;
-  }, [liveGear]);
-  useEffect(() => {
-    if (liveThrCap == null) return;
-    if (lastThrCap.current !== null && lastThrCap.current !== liveThrCap) {
-      const map: Record<string,string> = { IDLE:'100% (真飞不限幅)', CHECK:'30% (地检)', TEST:'33% (台架)' };
-      setToast(`油门限幅 → ${liveThrCap} (${map[liveThrCap] || ''})`);
-      setTimeout(() => setToast(null), 5000);
-    }
-    lastThrCap.current = liveThrCap;
-  }, [liveThrCap]);
-  useEffect(() => {
-    if (livePreflight == null) return;
-    if (lastChk.current !== null && lastChk.current !== livePreflight) {
-      setToast(livePreflight ? '⚠ 预检激活 (ch6 中档 + disarmed)' : '预检关闭');
-      setTimeout(() => setToast(null), 3000);
-    }
-    lastChk.current = livePreflight;
-  }, [livePreflight]);
+    lastMode.current = liveMode;
+  }, [liveMode]);
   useEffect(() => {
     if (liveRtl == null) return;
     if (lastRtl.current !== null && lastRtl.current !== liveRtl) {
@@ -92,6 +83,14 @@ export default function App() {
     }
     lastRtl.current = liveRtl;
   }, [liveRtl]);
+  useEffect(() => {
+    if (livePreflight == null) return;
+    if (lastChk.current !== null && lastChk.current !== livePreflight) {
+      setToast(livePreflight ? '⚠ 预检激活 (ch8 高位 + disarmed)' : '预检关闭');
+      setTimeout(() => setToast(null), 3000);
+    }
+    lastChk.current = livePreflight;
+  }, [livePreflight]);
 
   // ─── App-level GCS listener: 保证不管哪个 tab 打开, PARAM_VALUE 都同步到 store ───
   const [autoSyncStatus, setAutoSyncStatus] = useState<string | null>(null);
@@ -105,6 +104,7 @@ export default function App() {
       else if (m.type === 'heartbeat') {
         setGcsArmed(m.armed);
         setSimulateArmed(m.armed);
+        if (typeof m.custom_mode === 'number') setLiveMode(m.custom_mode);
       }
       else if (m.type === 'rc') setLiveRc(m.channels);
       else if (m.type === 'gps') setLiveGps({
@@ -115,8 +115,16 @@ export default function App() {
         fix_type: m.fix_type, sats: m.sats, yaw_deg: m.yaw_deg ?? null,
       });
       else if (m.type === 'statustext') {
-        if (/MSK (gear|mode|chk|thr|preflight|G[123])\b/i.test(m.text)) {
-          setToast(m.text);
+        // P7.8: WIG_AUTO phase → 状态机推 toast + 更新 livePhase
+        const phMatch = m.text.match(/WIG_AUTO phase\s*[→\->]+\s*(\w+)/);
+        if (phMatch) {
+          setLivePhase(phMatch[1]);
+          setToast(`Phase → ${phMatch[1]}`);
+          setTimeout(() => setToast(null), 3000);
+        }
+        // WIG dispatcher: X → Y (mode 切换)
+        if (/WIG dispatcher:/i.test(m.text)) {
+          setToast(m.text.replace(/^WIG /, ''));
           setTimeout(() => setToast(null), 3000);
         }
       }
@@ -145,30 +153,18 @@ export default function App() {
     return () => clearTimeout(t);
   }, [gcsConnected]);
 
-  const effectiveSpeed = useMemo(() => {
-    if (currentGear === 1) return Math.min(currentSpeed, params.MSK_V1);
-    if (currentGear === 2) return Math.min(currentSpeed, params.MSK_V2);
-    return currentSpeed;
-  }, [currentSpeed, currentGear, params.MSK_V1, params.MSK_V2]);
-
-  const currentK = useMemo(() => {
-    const groups: GroupKey[] = ['KS', 'KDF', 'KT', 'KRD'];
-    const k: Record<GroupKey, number> = { KS:0, KDF:0, KT:0, KRD:0 };
-    for (const g of groups) k[g] = evalCurve(g, effectiveSpeed, params);
-    return k;
-  }, [effectiveSpeed, params]);
-
   const panel = (() => {
     switch (currentTab) {
-      case 'gcs':       return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
+      case 'gcs':       return <Gcs />;
       case 'auto':      return <Auto />;
-      case 'profile':   return <FlightProfile effectiveSpeed={effectiveSpeed} currentK={currentK} />;
+      case 'gtest':     return <GroundTest />;
+      case 'profile':   return <FlightProfile />;
       case 'tilts':     return <Tilts />;
-      case 'geometry':  return <Geometry currentK={currentK} />;
+      case 'geometry':  return <Geometry />;
       case 'rtk':       return <RtkSetup />;
       case 'loganalysis': return <LogAnalysis />;
       case 'params':    return <Params />;
-      default: return <Gcs currentK={currentK} effectiveSpeed={effectiveSpeed} />;
+      default: return <Gcs />;
     }
   })();
 
@@ -180,42 +176,47 @@ export default function App() {
           {toast}
         </div>
       )}
-      {/* 常驻当前状态条 (v9: ch7 g_mode + ch6 thr_cap + ch8 preflight) */}
-      <div className="bg-panel-2 border-b border-line px-4 py-1 flex items-center gap-3 text-[11px] shrink-0">
-        <span className="text-fg-dim">当前状态:</span>
-        <span className="val-mono">
-          档位(ch7) <b className="text-accent">{liveGear ?? currentGear}{liveGear == null ? ' (UI)' : ''}</b>
-          <span className="text-fg-dim ml-1">
-            ({(liveGear ?? currentGear) === 1 ? 'G1 慢滑' : (liveGear ?? currentGear) === 2 ? 'G2 抬头建气垫' : 'G3 巡航'})
-          </span>
-        </span>
+      {/* P7.8 常驻顶部状态条: 连接 / Mode (ch6) / Phase / ch7 / Armed / 预检 / RTL */}
+      <div className="bg-panel-2 border-b border-line px-4 py-1.5 flex items-center gap-3 text-[11px] shrink-0">
+        <button
+          onClick={() => { gcsConnected ? gcs.disconnect() : gcs.connect(); }}
+          className={
+            'flex items-center gap-1.5 px-2 py-0.5 rounded border text-[11px] transition-colors ' +
+            (gcsConnected
+              ? 'border-ok text-ok hover:bg-ok/10'
+              : 'border-line text-fg-dim hover:text-fg hover:border-accent')
+          }
+          title={gcsConnected ? '断开 mavbridge' : '连接 mavbridge.py'}
+        >
+          {gcsConnected ? <Wifi size={12}/> : <WifiOff size={12}/>}
+          {gcsConnected ? '在线' : '离线'}
+        </button>
         <span className="text-fg-dim">|</span>
         <span className="val-mono">
-          油门限幅(ch6) <b className={
-            liveThrCap === null ? 'text-fg-dim'
-            : liveThrCap === 'IDLE' ? 'text-ok'
-            : liveThrCap === 'CHECK' ? 'text-warn'
-            : 'text-warn'
-          }>
-            {liveThrCap ?? '— (无 RC)'}
+          Mode(ch6) <b className={liveMode != null ? (MODE_COLOR[liveMode] || 'text-accent') : 'text-fg-dim'}>
+            {liveMode != null ? (MODE_LABELS[liveMode] || `mode ${liveMode}`) : '— (无 FC)'}
           </b>
-          {liveThrCap && (
-            <span className="text-fg-dim ml-1">
-              ({liveThrCap === 'IDLE' ? '100% 真飞' : liveThrCap === 'CHECK' ? '30% 地检' : '33% 台架'})
-            </span>
-          )}
+        </span>
+        {liveMode != null && ch7Label && (
+          <span className="val-mono">
+            <span className="text-fg-dim">ch7→</span><b className="text-accent">{ch7Label}</b>
+          </span>
+        )}
+        {livePhase !== '—' && liveMode === 27 && (
+          <span className="val-mono">
+            <span className="text-fg-dim">Phase</span> <b className="text-accent">{livePhase}</b>
+          </span>
+        )}
+        <span className="val-mono">
+          <span className="text-fg-dim">Armed</span> <b className={gcsArmed ? 'text-err' : 'text-ok'}>
+            {gcsArmed === null ? '—' : gcsArmed ? '● ARMED' : '○ off'}
+          </b>
         </span>
         {livePreflight && (
-          <>
-            <span className="text-fg-dim">|</span>
-            <span className="val-mono text-warn animate-pulse">⚠ 预检激活 (ch6 中档 + disarmed)</span>
-          </>
+          <span className="val-mono text-warn animate-pulse">⚠ 预检激活 (ch8 高 + disarmed)</span>
         )}
         {liveRtl && (
-          <>
-            <span className="text-fg-dim">|</span>
-            <span className="val-mono text-err animate-pulse">⚠ RTL ACTIVE (ch12, GPS 自动返航)</span>
-          </>
+          <span className="val-mono text-err animate-pulse">⚠ RTL (ch12)</span>
         )}
       </div>
       {/* Header */}
@@ -224,44 +225,12 @@ export default function App() {
           <div className="w-6 h-6 rounded bg-gradient-to-br from-accent to-ks flex items-center justify-center text-bg font-bold">M</div>
           <div>
             <div className="text-[13px] font-semibold text-fg">MantaShark 地面站</div>
-            <div className="text-[10px] text-fg-dim">v9.0 · ArduPlane · 12 EDF + 7 tilt · PCHIP</div>
+            <div className="text-[10px] text-fg-dim">v9 P7.8 · ArduPlane · 12 EDF + 7 tilt · FLTMODE_CH=6</div>
           </div>
         </div>
 
         <div className="ml-auto flex items-center gap-4 text-[11px]">
-          <StatBox label="速度" val={`${currentSpeed.toFixed(1)} m/s`} />
-          {/* 实时档位 (FC 真值优先, 离线 fallback Tuner UI 调试态) */}
-          <StatBox label="档位">
-            <span className={'chip chip-active text-[10px] ' + (liveGear ? 'border-ok' : '')}>
-              {liveGear ?? currentGear}{liveGear == null ? ' (UI)' : ''}
-            </span>
-          </StatBox>
-          <StatBox label="ThrCap">
-            <span className={
-              'chip text-[10px] ' +
-              (liveThrCap === null ? ''
-                : liveThrCap === 'IDLE' ? 'chip-active text-ok'
-                : liveThrCap === 'CHECK' ? 'chip-active text-warn'
-                : 'chip-active text-warn')
-            } title={liveThrCap === null ? '无 RC ch6' : liveThrCap === 'IDLE' ? '100% 真飞 (不限幅)' : liveThrCap === 'CHECK' ? '30% 地检' : '33% 台架'}>
-              {liveThrCap ?? '— (无 RC)'}
-            </span>
-          </StatBox>
-          {livePreflight && (
-            <StatBox label="预检">
-              <span className="chip chip-active text-warn text-[10px] animate-pulse" title="ch6 中档 + disarmed = 4 阶段地面预检">
-                CHK
-              </span>
-            </StatBox>
-          )}
-          {liveRtl && (
-            <StatBox label="RTL">
-              <span className="chip chip-err text-[10px] animate-pulse" title="ch12 高位 = ArduPlane GPS 返航激活">
-                ACTIVE
-              </span>
-            </StatBox>
-          )}
-          {/* v9 P4: RTK 状态 (双头 C-RTK2 HP fix type + heading) */}
+          {/* P7.8: gear/ThrCap/Phase StatBox 撤了, 状态条接管. header 只留 RTK + 同步指示 */}
           {liveGps && (
             <StatBox label="RTK">
               <span
@@ -283,36 +252,11 @@ export default function App() {
               </span>
             </StatBox>
           )}
-          <StatBox label="Phase">
-            <span className={
-              'chip chip-active text-[10px] ' +
-              (currentPhase === 'EMERGENCY' ? 'chip-err' : '')
-            }>{currentPhase}</span>
-          </StatBox>
-          {/* 自动同步状态 (连 FC 后 1s 拉所有参数, 4s 自动消失) */}
           {autoSyncStatus && (
             <span className="val-mono text-[10px] px-2 py-1 rounded border border-accent text-accent fade-in">
               {autoSyncStatus}
             </span>
           )}
-          {/* 常驻 GCS 连接指示 */}
-          <button
-            onClick={() => {
-              if (gcsConnected) gcs.disconnect();
-              else gcs.connect();
-              setTab('gcs');
-            }}
-            className={
-              'flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] transition-colors ' +
-              (gcsConnected
-                ? 'border-ok text-ok hover:bg-ok/10'
-                : 'border-line text-fg-dim hover:text-fg hover:border-accent')
-            }
-            title={gcsConnected ? '点击断开 GCS' : '点击连接 mavbridge.py'}
-          >
-            {gcsConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
-            {gcsConnected ? (gcsArmed ? 'FC · ARMED' : 'FC · disarmed') : '连接 FC'}
-          </button>
         </div>
       </header>
 
@@ -346,8 +290,8 @@ export default function App() {
 
       {/* Footer */}
       <footer className="bg-panel border-t border-line px-4 py-2 flex items-center gap-3 text-[10px] text-fg-dim shrink-0">
-        <span>WIG · 10kg · 14×64mm EDF (12 active + 2 retired DM) · QF2822 2300KV</span>
-        <span className="ml-auto">© MantaShark · Vue → React 重构 v9.0</span>
+        <span>WIG · 10kg · 12×64mm EDF · QF2822 2300KV · 7 倾转 (CAN-PWM)</span>
+        <span className="ml-auto">© MantaShark · v9 P7.8</span>
       </footer>
     </div>
   );

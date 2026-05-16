@@ -5,14 +5,12 @@ import { MOTORS, GROUP_COLORS, TILTS } from '../../lib/actuators';
 import type { GroupKey, TiltId, TiltAlias } from '../../lib/types';
 import { AlertTriangle, Info, Edit3, X, Radio } from 'lucide-react';
 import { dynamicGeometry, type MotorId } from '../../lib/geometry';
-import { gcs } from '../../lib/gcs';
+import { gcs, GcsMessage } from '../../lib/gcs';
 
 // TiltId → alias (PRE_OVR_<alias>)
 const TILT_ALIAS_MAP: Record<TiltId, TiltAlias> = {
   DFL:'DFL', DFR:'DFR', TL1:'TL1', TR1:'TR1', RDL:'RDL', RDR:'RDR', S_GROUP_TILT:'SGRP',
 };
-
-interface Props { currentK: Record<GroupKey, number>; }
 
 // motor → 控制其 tilt 的 servo id
 const MOTOR_TILT_SRC: Record<string, TiltId | null> = {
@@ -23,7 +21,20 @@ const MOTOR_TILT_SRC: Record<string, TiltId | null> = {
   TL2: null, TR2: null,
 };
 
-export function Geometry({ currentK }: Props) {
+export function Geometry() {
+  // P7.8: currentK 改订阅 NAMED_VALUE_FLOAT (lua mixer 5Hz, 公式 (K_base+drift)×ramp + boost×BST × cap)
+  const [currentK, setCurrentK] = useState<Record<GroupKey, number>>({ KS:0, KDF:0, KT:0, KRD:0 });
+  useEffect(() => {
+    const off = gcs.on((m: GcsMessage) => {
+      if (m.type === 'named_float') {
+        if      (m.name === 'K_KS')  setCurrentK(k => ({ ...k, KS:  m.value }));
+        else if (m.name === 'K_KDF') setCurrentK(k => ({ ...k, KDF: m.value }));
+        else if (m.name === 'K_KT')  setCurrentK(k => ({ ...k, KT:  m.value }));
+        else if (m.name === 'K_KRD') setCurrentK(k => ({ ...k, KRD: m.value }));
+      }
+    });
+    return () => { off(); };
+  }, []);
   const { params, analysisTilts, analysisDfTarget,
           setAnalysisTilt, setAnalysisDfTarget, setParam, simulateArmed } = useStore();
   const [editingGeo, setEditingGeo] = useState(false);

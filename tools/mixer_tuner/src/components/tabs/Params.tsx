@@ -176,18 +176,17 @@ export function Params() {
         </button>
       </div>
 
-      {/* 预设切换 (lua 自动切, 仅显示当前 + 手动覆盖入口) */}
+      {/* 预设切换 (P7.8: thr_cap 三档撤了, 预设手动按钮触发) */}
       <div className="card">
         <div className="card-title flex items-center gap-2">
-          <span>ATC 预设 (lua 自动切)</span>
+          <span>ATC 预设 (手动应用)</span>
         </div>
         <div className="text-[11px] text-fg-mute leading-relaxed">
-          ch6 切档时 main.lua 自动写参数:
+          P7.8 撤了 ch6 thr_cap 三档自动切 (ch6 改 mode 选择). 预设按钮纯手动一次性写参数:
           <ul className="list-disc ml-5 mt-1">
-            <li><b>FLY / CHECK</b> → 飞行预设 (Q_A_ANG_RLL_P=4.5 / RAT_*_P=0.135 / ANGLE_MAX=10° / FB_SC=5)</li>
-            <li><b>TEST</b> → 地测预设 (Q_A_ANG_RLL_P=8 / RAT_*_P=0.4 / ANGLE_MAX=30° / FB_SC=25)</li>
+            <li><b>飞行</b> → Q_A_ANG_RLL_P=4.5 / RAT_*_P=0.135 / ANGLE_MAX=15°</li>
+            <li><b>地测</b> → Q_A_ANG_RLL_P=8 / RAT_*_P=0.4 / ANGLE_MAX=30°</li>
           </ul>
-          <span className="text-fg-dim block mt-1">不需手动按钮. STATUSTEXT 显示 "MSK 预设 -&gt; 飞行/地测". 实飞前 ch6 别拨到 TEST 即可.</span>
         </div>
         <div className="flex gap-2 flex-wrap mt-2">
           <button

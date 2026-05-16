@@ -94,31 +94,13 @@ export const useStore = create<AppState & Actions>()(
         phaseConfig: JSON.parse(JSON.stringify(DEFAULT_PHASE_CONFIG)),
       }),
 
-      autoUpdatePhase: () => {
-        const s = get();
-        if (!s.phaseAutoSync) return;
-        if (!s.simulateArmed) { set({ currentPhase: 'STATIONARY' }); return; }
-        const spd = s.currentSpeed;
-        const V1 = s.params.MSK_V1, V2 = s.params.MSK_V2;
-        const prev = s.currentPhase;
-        let next: PhaseName = prev;
-        if (prev === 'STATIONARY' && spd > 0.5) next = 'TAXI';
-        else if (prev === 'TAXI') {
-          if (spd < 0.3) next = 'STATIONARY';
-          else if (spd > V1 - 0.5) next = 'CUSHION';
-        } else if (prev === 'CUSHION') {
-          if (spd < V1 - 1.5) next = 'TAXI';
-          else if (spd > V2 - 0.5) next = 'GROUND_EFFECT';
-        } else if (prev === 'GROUND_EFFECT') {
-          if (spd < V2 - 1.5) next = 'CUSHION';
-        }
-        if (next !== prev) set({ currentPhase: next });
-      },
+      // P7.8: autoUpdatePhase 撤了 (PCHIP / MSK_V1 / MSK_V2 老 phase 自动机, P7 走 WIG_AUTO 状态机)
+      autoUpdatePhase: () => {},
     }),
     {
       name: 'mantashark-tuner-v9',
       // Bumping version: 旧的 persisted state 会被 migrate() 处理. 改 schema 时 +1 强制清旧坏数据.
-      version: 7,
+      version: 8,
       migrate: (persisted: any, version: number) => {
         // v3 之前: selectedCurve 可能存了非法值导致崩溃 → 重置 UI 状态.
         // v4: simulateArmed 默认值改 false (旧的 true 会卡住调参 UI 显示"已 armed").
@@ -151,6 +133,17 @@ export const useStore = create<AppState & Actions>()(
           // v7: 严格清 store, 只保留 DEFAULT_PARAMS 里有的 key (删旧 schema 残留:
           // 4 老 K MSK_KS/KDF/KT/KRD, MSK_GEAR_CH/AUTO_CH/MODE_CH/RTL_CH, MSK_V1/V2/V3/V_MAX,
           // GRD_*/MGEO_*/TLTC_* 等等). 缺的 key 用 default 补。
+          if (persisted.params) {
+            const cleaned: Record<string, number> = {};
+            for (const k of Object.keys(DEFAULT_PARAMS)) {
+              cleaned[k] = (k in persisted.params) ? persisted.params[k] : DEFAULT_PARAMS[k];
+            }
+            persisted.params = cleaned;
+          }
+        }
+        if (!persisted || version < 8) {
+          // v8: P7.8ω 加 SCR_ENABLE / Q_FRAME_CLASS / EK3_SRC1_YAW / COMPASS_USE /
+          // Q_A_RAT_YAW_P/I/D / Q_A_ANG_YAW_P / WIGK_HDG_HOLD_EN 等. 重 fill default.
           if (persisted.params) {
             const cleaned: Record<string, number> = {};
             for (const k of Object.keys(DEFAULT_PARAMS)) {

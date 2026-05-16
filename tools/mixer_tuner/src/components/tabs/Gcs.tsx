@@ -3,17 +3,18 @@ import { gcs, GcsMessage } from '../../lib/gcs';
 import { useStore } from '../../store/useStore';
 import { Wifi, WifiOff, PlugZap, Upload, Download, Lock, Unlock, RefreshCcw, Terminal, TrendingUp } from 'lucide-react';
 import { DEFAULT_PARAMS, SYNC_SKIP_RE } from '../../lib/defaults';
-import { evalCurve } from '../../lib/pchip';
 import { GROUP_COLORS, GROUP_LABELS, MOTORS, SINGLE_MOTOR_MAX_N, VEHICLE_WEIGHT_N } from '../../lib/actuators';
 import type { GroupKey } from '../../lib/types';
 
-interface Props {
-  currentK?: Record<GroupKey, number>;        // 来自 App (UI 调试态), 仅未连 FC 时显示
-  effectiveSpeed?: number;
-}
+// P7.8: mode 17/27/29 标签 (custom_mode 数字; heartbeat.mode 字符串对自定义返回 "Mode(27)" 无法识别)
+const MODE_LABELS: Record<number, string> = {
+  17: 'MANUAL (QSTAB)',
+  27: 'AUTO (WIG_AUTO)',
+  29: 'RECV (WIG_RECV)',
+};
 
 interface Telemetry {
-  heartbeat?: { mode: string; armed: boolean; ts: number };
+  heartbeat?: { mode: string; custom_mode?: number; armed: boolean; ts: number };
   attitude?:  { roll: number; pitch: number; yaw: number };
   vfr?:       { airspeed: number; groundspeed: number; alt: number; climb: number; throttle: number };
   gps?:       { fix_type: number; sats: number; hdop: number | null };
@@ -25,7 +26,7 @@ interface Telemetry {
 
 interface Stats { pullCount: number; pullTotal: number; pushCount: number; }
 
-export function Gcs({ currentK, effectiveSpeed }: Props) {
+export function Gcs() {
   const { params, setParam } = useStore();
   const [url, setUrl] = useState(gcs.getUrl());
   const [connected, setConnected] = useState(false);
@@ -33,7 +34,13 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
   const [log, setLog] = useState<Array<{ sev: number; text: string; ts: number }>>([]);
   const [stats, setStats] = useState<Stats>({ pullCount: 0, pullTotal: 0, pushCount: 0 });
   const [syncMode, setSyncMode] = useState<'none' | 'pulling' | 'pushing'>('none');
+  // P7.8: liveK 改订阅 NAMED_VALUE_FLOAT (lua mixer 5Hz 推, 真实 K_eff = (K_base+drift)×ramp+boost×BST × cap)
+  const [liveK, setLiveK] = useState<Record<GroupKey, number>>({ KS:0, KDF:0, KT:0, KRD:0 });
+  const [liveLayer, setLiveLayer] = useState(0);
+  const [livePhase, setLivePhase] = useState<string>('—');
+  const [liveQTrim, setLiveQTrim] = useState<number | undefined>(undefined);  // P7.8γ: lua 5Hz 推, 实时 Q_TRIM_PITCH
   const logRef = useRef<HTMLDivElement>(null);
+  const logAutoScrollRef = useRef<boolean>(true);  // 用户滚到底 → true, 上滚 → false
 
   useEffect(() => {
     setConnected(gcs.isConnected());
@@ -46,7 +53,19 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
       else if (m.type === 'rc')       setTlm(t => ({ ...t, rc: m.channels, lastMsgMs: Date.now() }));
       else if (m.type === 'servo')    setTlm(t => ({ ...t, servo: m.channels, lastMsgMs: Date.now() }));
       else if (m.type === 'battery')  setTlm(t => ({ ...t, battery: { voltage: m.voltage, current: m.current, remaining: m.remaining, consumed_mah: m.consumed_mah }, lastMsgMs: Date.now() }));
-      else if (m.type === 'statustext') setLog(l => [...l.slice(-199), { sev: m.severity, text: m.text, ts: Date.now() }]);
+      else if (m.type === 'named_float') {
+        if      (m.name === 'K_KS')  setLiveK(k => ({ ...k, KS:  m.value }));
+        else if (m.name === 'K_KDF') setLiveK(k => ({ ...k, KDF: m.value }));
+        else if (m.name === 'K_KT')  setLiveK(k => ({ ...k, KT:  m.value }));
+        else if (m.name === 'K_KRD') setLiveK(k => ({ ...k, KRD: m.value }));
+        else if (m.name === 'LAYER') setLiveLayer(m.value);
+        else if (m.name === 'QTRIM') setLiveQTrim(m.value);
+      }
+      else if (m.type === 'statustext') {
+        setLog(l => [...l.slice(-199), { sev: m.severity, text: m.text, ts: Date.now() }]);
+        const phMatch = m.text.match(/WIG_AUTO phase\s*[→\->]+\s*(\w+)/);
+        if (phMatch) setLivePhase(phMatch[1]);
+      }
       // param 由 App-level listener 统一写 store, 这里只看到累计计数
       else if (m.type === 'param') setStats(s => ({ ...s, pullCount: s.pullCount + 1, pullTotal: m.count }));
       else if (m.type === 'error') setLog(l => [...l.slice(-199), { sev: 2, text: '❌ ' + m.msg, ts: Date.now() }]);
@@ -54,7 +73,18 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
     return () => { off(); };
   }, []);
 
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [log]);
+  // smart auto-scroll: 只在用户已在底部时跟新, 上滚停留
+  useEffect(() => {
+    if (logRef.current && logAutoScrollRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [log]);
+  const onLogScroll = () => {
+    if (!logRef.current) return;
+    const el = logRef.current;
+    // 距底 5px 内算"在底部" (sub-pixel tolerance)
+    logAutoScrollRef.current = (el.scrollTop + el.clientHeight) >= (el.scrollHeight - 5);
+  };
 
   const connect = () => { gcs.setUrl(url); gcs.connect(); };
   const disconnect = () => gcs.disconnect();
@@ -94,50 +124,43 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
   const sevColor = (s: number) => s <= 2 ? 'text-err' : s <= 4 ? 'text-warn' : s <= 6 ? 'text-fg' : 'text-fg-dim';
   const healthy = connected && tlm.lastMsgMs && (Date.now() - tlm.lastMsgMs < 3000);
 
-  // ─── 实时 K (v9 三档 静态查表, lua mixer.lua read_k_table 复刻) ───
-  // ch7 PWM <1300 → G1, 1300-1700 → G2, >1700 → G3, 各档 K_table 静态查 MSK_K{group}_{gear}
+  // ─── P7.8: 拨杆解码 mode-aware (ch6=ArduPlane FLTMODE, ch7 语义跟 mode 走) ───
   const liveRcCh = (tlm as any).rc as number[] | undefined;
-  const gearChIdx = 6;  // ch7 (固定 v9 默认, MSK_GEAR_CH 已删)
-  const liveGearLocal = liveRcCh ? (() => {
-    const pwm = liveRcCh[gearChIdx] ?? 1500;
-    return pwm < 1300 ? 1 : pwm < 1700 ? 2 : 3;
-  })() : 1;
   const liveSpd = healthy ? (tlm.vfr?.groundspeed ?? 0) : null;
-  const liveSpdEff = liveSpd ?? 0;  // v9 没 V 断点, 直接用 GPS 地速做显示
-
-  // v9 P3.9: ch6 TEST (PWM>1700) 时全组 K 统一 = MSK_THR_TEST (跟 lua mixer.set_test_unified 一致)
+  // mode 数字 (heartbeat.custom_mode, mode 字符串对 27/29 自定义会返回 "Mode(27)" 无法识别)
+  const modeNum = tlm.heartbeat?.custom_mode ?? null;
   const ch6Pwm = liveRcCh ? (liveRcCh[5] ?? 1500) : 1500;
-
-  // ─── pitch 目标 + 偏差 (v9 P6: 区分 base_pitch + stick + 偏差) ───
-  // 真实目标 body pitch = Q_TRIM_PITCH(base) + stick × MIN(PTCH_LIM, Q_A_ANGLE_MAX) (mode_qstabilize.cpp:96-100)
-  //   - base: MSK_BPCH_G<gear> 静态 (vmix 时三段插值)
-  //   - stick: ch2 (pitch stick) × MIN(PTCH_LIM_MAX/-PTCH_LIM_MIN, Q_A_ANGLE_MAX)
-  // 偏差 ΔP = actual_pitch − (base + stick), 染色阈值 ±MSK_P_EMRG_DEG
   const ch7Pwm = liveRcCh ? (liveRcCh[6] ?? 1500) : 1500;
   const ch2Pwm = liveRcCh ? (liveRcCh[1] ?? 1500) : 1500;
-  const vmixEn = (params.MSK_VMIX_EN ?? 1) >= 0.5;
+  // ch7 解码: MANUAL → phase, AUTO → profile (armed 边沿 latch)
+  const ch7Label = (() => {
+    if (modeNum == null) return '— (无 mode)';
+    const tier = ch7Pwm < 1300 ? 'low' : ch7Pwm <= 1700 ? 'mid' : 'high';
+    if (modeNum === 17) return tier === 'low' ? 'TAXI' : tier === 'mid' ? 'TRANS' : 'CRUISE';
+    if (modeNum === 27) return tier === 'low' ? 'MATRIX' : tier === 'mid' ? 'TURN' : 'CRUISE';
+    if (modeNum === 29) return 'n/a';
+    return '?';
+  })();
+  // P7.8γ: pitchBase 优先用 liveQTrim (lua 5Hz 推送的实时 Q_TRIM_PITCH ramp 后值),
+  // 没收到 NVF 时 fallback phase 推断 (旧路径). 修 phase 切换 ramp 中 body 显示错的 bug.
   const pitchBase = useMemo(() => {
+    if (liveQTrim !== undefined) return liveQTrim;  // 真值: lua 推的 ramp 后实时 trim
     const bp1 = params.MSK_BPCH_G1 ?? 5;
     const bp2 = params.MSK_BPCH_G2 ?? 11;
     const bp3 = params.MSK_BPCH_G3 ?? 8;
-    if (vmixEn && liveSpd != null) {
-      const vLo  = params.MSK_VMIX_LO  ?? 3.0;
-      const vMid = params.MSK_VMIX_MID ?? 6.5;
-      const vHi  = params.MSK_VMIX_HI  ?? 10.0;
-      let alpha;
-      if (liveSpd <= vLo) alpha = 0;
-      else if (liveSpd <= vMid) alpha = 0.5 * (liveSpd - vLo) / Math.max(vMid - vLo, 0.1);
-      else if (liveSpd <= vHi) alpha = 0.5 + 0.5 * (liveSpd - vMid) / Math.max(vHi - vMid, 0.1);
-      else alpha = 1;
-      if (ch7Pwm < 1300) alpha = 0;
-      else if (ch7Pwm > 1700) alpha = 1;
-      if (alpha < 0.5) return (1 - 2*alpha) * bp1 + (2*alpha) * bp2;
-      else return (2 - 2*alpha) * bp2 + (2*alpha - 1) * bp3;
+    if (modeNum === 17) {  // MANUAL: ch7 直选 phase
+      const tier = ch7Pwm < 1300 ? 1 : ch7Pwm <= 1700 ? 2 : 3;
+      return tier === 1 ? bp1 : tier === 2 ? bp2 : bp3;
     }
-    return liveGearLocal === 1 ? bp1 : liveGearLocal === 2 ? bp2 : bp3;
-  }, [vmixEn, liveSpd, liveGearLocal, ch7Pwm,
-      params.MSK_BPCH_G1, params.MSK_BPCH_G2, params.MSK_BPCH_G3,
-      params.MSK_VMIX_LO, params.MSK_VMIX_MID, params.MSK_VMIX_HI]);
+    if (modeNum === 27) {  // AUTO: phase 由状态机定, 跟 wig_auto STATUSTEXT 取 — Tuner 这边用 livePhase
+      if (livePhase.startsWith('FLOAT') || livePhase === 'IDLE') return bp1;
+      if (livePhase.startsWith('TRANS') || livePhase.startsWith('DECEL')) return bp2;
+      if (livePhase === 'CRUISE' || livePhase === 'TURN') return bp3;
+      return bp2;
+    }
+    if (modeNum === 29) return bp1;  // RECV 固定锁 TAXI
+    return bp1;
+  }, [liveQTrim, modeNum, ch7Pwm, livePhase, params.MSK_BPCH_G1, params.MSK_BPCH_G2, params.MSK_BPCH_G3]);
 
   const pitchStick = useMemo(() => {
     // stick_input = (pwm-1500)/500, [-1, +1]
@@ -169,24 +192,7 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
   // Tgt 始终显示 "base+stick" 拆解格式 (即使 stick=0 也显示 "+0.0°")
   const pitchTgtDisplay = pitchBase.toFixed(1) + '°' +
     (pitchStick >= 0 ? '+' : '') + pitchStick.toFixed(1) + '°';
-  const liveK: Record<GroupKey, number> = useMemo(() => {
-    if (liveSpd == null) return currentK ?? { KS:0, KDF:0, KT:0, KRD:0 };
-    if (ch6Pwm > 1700) {
-      const v = Math.max(0, Math.min(1, params.MSK_THR_TEST ?? 0.33));
-      return { KS: v, KDF: v, KT: v, KRD: v };
-    }
-    const g = `G${liveGearLocal}`;
-    const get = (grp: GroupKey) => {
-      const v = params[`MSK_${grp}_${g}`];
-      return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
-    };
-    return { KS: get('KS'), KDF: get('KDF'), KT: get('KT'), KRD: get('KRD') };
-  }, [liveSpd, liveGearLocal, ch6Pwm, params.MSK_THR_TEST,
-      params.MSK_KS_G1, params.MSK_KS_G2, params.MSK_KS_G3,
-      params.MSK_KDF_G1, params.MSK_KDF_G2, params.MSK_KDF_G3,
-      params.MSK_KT_G1, params.MSK_KT_G2, params.MSK_KT_G3,
-      params.MSK_KRD_G1, params.MSK_KRD_G2, params.MSK_KRD_G3,
-      currentK]);
+  // P7.8: liveK 走 useState 订阅 NAMED_VALUE_FLOAT (上面 useEffect 拿). 不本地算 MSK_K*_G* (撤了).
   const liveTotalThrust = MOTORS.reduce((s, m) => s + (liveK[m.group] ?? 0) * SINGLE_MOTOR_MAX_N, 0);
   const liveTW = liveTotalThrust / VEHICLE_WEIGHT_N;
 
@@ -213,8 +219,9 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
 
           {/* 遥测格 */}
           <div className="flex items-center gap-1 ml-2">
-            <TlmCell label="Mode" val={tlm.heartbeat?.mode ?? '—'} />
-            <TlmCell label="Armed" val={armed ? 'ARMED' : 'OFF'} color={armed ? 'warn' : 'ok'} />
+            <TlmCell label="Mode" val={modeNum != null ? (MODE_LABELS[modeNum] || `mode ${modeNum}`) : '—'}
+                     color={modeNum === 29 ? 'err' : modeNum === 27 ? 'warn' : modeNum === 17 ? 'ok' : undefined} />
+            <TlmCell label="Armed" val={armed ? 'ARMED' : 'OFF'} color={armed ? 'err' : 'ok'} />
             <TlmCell label="GPS" val={tlm.gps ? `${tlm.gps.fix_type}/${tlm.gps.sats}★` : '—'} />
             <TlmCell label="HDOP" val={tlm.gps && tlm.gps.hdop !== null ? tlm.gps.hdop.toFixed(1) : '—'} />
             <TlmCell label="Body"  val={pitchActual !== undefined ? pitchActual.toFixed(1)+'°' : '—'} />
@@ -446,7 +453,7 @@ export function Gcs({ currentK, effectiveSpeed }: Props) {
           <span className="text-[9px] text-fg-dim ml-2">MSK CHK / K 心跳 / tilt saturation</span>
           {armed && <span className="ml-auto text-[9px] text-warn">⚠ FC 已 armed, 禁推参数</span>}
         </div>
-        <div ref={logRef} className="bg-bg-100 border border-line rounded p-1.5 h-40 overflow-auto text-[10px] font-mono space-y-0.5">
+        <div ref={logRef} onScroll={onLogScroll} className="bg-bg-100 border border-line rounded p-1.5 h-40 overflow-auto text-[10px] font-mono space-y-0.5">
           {log.length === 0 && <div className="text-fg-dim">暂无消息</div>}
           {log.map((l, i) => (
             <div key={i} className={sevColor(l.sev)}>

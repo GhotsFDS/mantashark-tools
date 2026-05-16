@@ -46,35 +46,39 @@ except ImportError:
     sys.exit(1)
 
 # ─── 涵道分组（与 Lua 一致）───
+# v9 P4: 12 EDF 4 组 (KDM 已删, motor 7-8 重映射为 TL1/TL2 = KT 组)
 MOTOR_GROUPS = {
-    'KS':  {'name':'斜吹',     'channels':[1,2,3,4],   'angle_body':37},
-    'KDF': {'name':'前下吹',   'channels':[5,6],       'angle_body':90},
-    'KDM': {'name':'中下吹',   'channels':[7,8],       'angle_body':90},
-    'KT':  {'name':'后推',     'channels':[9,10,11,12],'angle_body':0},
-    'KRD': {'name':'后斜下',   'channels':[13,14],     'angle_body':30},
+    'KS':  {'name':'斜吹',     'channels':[1,2,3,4],         'angle_body':37},
+    'KDF': {'name':'前下吹',   'channels':[5,6],             'angle_body':90},
+    'KT':  {'name':'后推',     'channels':[7,8,9,10],        'angle_body':0},
+    'KRD': {'name':'后斜下',   'channels':[11,12],           'angle_body':30},
 }
 
-# 实测推力表 (24V 6S 满电, QF2822 64mm)
-THROTTLE_THRUST = [
-    (0.00, 0.00), (0.50, 7.36), (0.60, 10.30), (0.70, 13.54),
-    (0.80, 16.87), (0.90, 20.40), (1.00, 23.25),
-]
-
-def interp(table, x):
-    if x <= 0: return 0
-    if x >= 1: return table[-1][1]
-    for i in range(len(table)-1):
-        x0,y0 = table[i]; x1,y1 = table[i+1]
-        if x <= x1:
-            t = (x - x0)/(x1 - x0)
-            return y0 + (y1 - y0)*t
-    return table[-1][1]
-
-def thrust_per_fan(pwm):
-    """从 PWM 估算推力（PWM 1000-2000 → throttle 0-1）"""
-    if pwm < 1050: return 0
-    throttle = max(0, min(1, (pwm - 1000) / 1000))
-    return interp(THROTTLE_THRUST, throttle)
+# 实测推力表 (24V 6S 满电, QF2822 64mm) — 共享自 sim/edf_thrust.py
+# 单一权威源, 离线分析 + Gazebo + Lua sim 都用这一份
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+sys.path.insert(0, os.path.join(_REPO_ROOT, 'sim'))
+try:
+    from edf_thrust import THRUST_TABLE as THROTTLE_THRUST, thrust_per_fan_pwm as thrust_per_fan, _interp as interp  # type: ignore
+except ImportError:
+    # Fallback: 旧实测表 (PyInstaller onefile 兜底)
+    THROTTLE_THRUST = [
+        (0.00, 0.00), (0.50, 7.36), (0.60, 10.30), (0.70, 13.54),
+        (0.80, 16.87), (0.90, 20.40), (1.00, 23.25),
+    ]
+    def interp(table, x):
+        if x <= 0: return 0
+        if x >= 1: return table[-1][1]
+        for i in range(len(table)-1):
+            x0,y0 = table[i]; x1,y1 = table[i+1]
+            if x <= x1:
+                t = (x - x0)/(x1 - x0)
+                return y0 + (y1 - y0)*t
+        return table[-1][1]
+    def thrust_per_fan(pwm):
+        if pwm < 1050: return 0
+        throttle = max(0, min(1, (pwm - 1000) / 1000))
+        return interp(THROTTLE_THRUST, throttle)
 
 # 颜色（终端 ANSI）
 class C:
@@ -93,13 +97,25 @@ class LogAnalyzer:
         self.events = []
         self.errors = []
         self.params = {}
-        self.att = []      # (t, roll, pitch, yaw, des_pitch)
+        # ═══ pitch 坐标系警告 (memory: feedback_ahrs_pitch_is_body.md) ═══
+        # ATT.Pitch 在 VTOL 模式是 VIEW 帧 (= body - Q_TRIM_PITCH), Plane.Log_Write_Attitude:14-23
+        # 调 ahrs_view->Write_AttitudeView(...). 跟 MAVLink ATTITUDE.pitch 同源.
+        # 要 body 绝对角度, 用 MSK4.pa (我们 lua 写的, ahrs:get_pitch_rad() = body), 或 ATT.Pitch + Q_TRIM_PITCH.
+        self.att = []      # (t, roll, pitch_view, yaw, des_pitch)  pitch_view (VTOL): = body - Q_TRIM_PITCH
+        self.msk4 = []     # (t, pa_body_deg, pb_target_deg, po, ra_body_deg, ro, yo, to) — body 帧, 都 deg (P7.8n+ 单位统一)
+        self.msk5 = []     # (t, v_tgt, v_act, v_err, kt_corr, layer) — V_PI 速度环状态 (1Hz)
+        self.msk6 = []     # (t, ks_d, kdf_d, kt_d, krd_d) — K_drift 4 路 (50Hz)
+        self.msk8 = []     # (t, mode, v_tgt, base_pitch, layer) — dispatcher mode + phase 状态
+        self.msk_phase_changes = []   # (t, phase_int)  MSKP — wig_auto phase 切换 marker
+        self.msk_run_starts = []      # (t, cruise, strat, profile, v_tgt)  MSKR — armed 边沿 run 配置 latch
         self.gps = []      # (t, spd, alt)
-        self.rcin = []     # (t, ch1..ch16)
-        self.rcou = []     # (t, ch1..ch16)
+        self.rcin = []     # (t, ch1..ch19)
+        self.rcou = []     # (t, ch1..ch19)  19 = MantaShark v9 7 倾转占 SERVO13-19
         self.bat = []      # (t, voltage, current)
         self.armed_periods = []
         self.warnings = []
+        # v9 P4: MSK7 = tilt 实际角度 abs° (commanded/actual × 7 路 + S→DF 补偿)
+        self.msk7 = []     # (t, cDl,cDr,cTl,cTr,cRl,cRr,cS, aDl,aDr,aTl,aTr,aRl,aRr,aS, CMP)
         # v3+ 固件: MSK Lua 事件 (来自 MSG 文本)
         self.msk_mode_changes = []    # (t, mode_name)  NOGPS/GPS_WEAK/GPS_FULL
         self.msk_gear_changes = []    # (t, gear)
@@ -126,43 +142,160 @@ class LogAnalyzer:
             if t == 'PARM':
                 self.params[m.Name] = m.Value
             elif t == 'MODE':
-                self.modes.append((ts, m.Mode, getattr(m,'ModeNum','?')))
+                # P7.8p: ArduPilot 自定义 mode 17/27/29 在 BIN 显示 "Mode(N)" 字符串, 这里解码
+                num = getattr(m, 'ModeNum', None)
+                name = m.Mode
+                if isinstance(name, str) and name.startswith('Mode('):
+                    # 自定义 mode 标准名 fallback
+                    name = {17:'MANUAL(QSTAB)', 27:'AUTO(WIG_AUTO)', 29:'RECV(WIG_RECV)'}.get(num, name)
+                self.modes.append((ts, name, num))
             elif t == 'EV':
                 self.events.append((ts, m.Id))
             elif t == 'ERR':
                 self.errors.append((ts, m.Subsys, m.ECode))
             elif t == 'ATT':
+                # m.Pitch 是 VIEW 帧 (VTOL 模式, = body - Q_TRIM_PITCH). 实际 body 用 MSK4.pa 或 + Q_TRIM_PITCH
                 self.att.append((ts, m.Roll, m.Pitch, m.Yaw, getattr(m,'DesPitch',0)))
+            elif t == 'MSK4':
+                # lua 自定义 BIN (P7.8n+): pa=body pitch deg, pb=target deg, po/ra/ro/yo/to. body err = pb - pa.
+                # 旧 P6/P7.5- BIN pa 是 rad 单位混杂 bug, 分析旧 log 看到 pa<2 大概率是 rad → 自动转 deg
+                try:
+                    pa = m.pa
+                    ra = m.ra
+                    if abs(pa) < 2 and abs(ra) < 2:  # 旧 log rad 兼容 (deg 通常 > 2)
+                        pa = pa * 57.2958
+                        ra = ra * 57.2958
+                    self.msk4.append((ts, pa, m.pb, m.po, ra, m.ro, m.yo, m.to))
+                except AttributeError:
+                    pass
+            elif t == 'MSK5':
+                # V_PI 速度环 1Hz 状态: v_tgt / v_actual / err / kt_correction / accel_layer
+                try:
+                    self.msk5.append((ts, m.vt, m.va, m.ve, m.ko, m.la))
+                except AttributeError:
+                    pass
+            elif t == 'MSK6':
+                # K_drift 50Hz: 4 路偏移值
+                try:
+                    self.msk6.append((ts, m.ksd, m.kdd, m.ktd, m.krd))
+                except AttributeError:
+                    pass
+            elif t == 'MSK8':
+                # dispatcher mode + V_TGT + base_pitch + layer (50Hz)
+                try:
+                    self.msk8.append((ts, m.mode, m.vtd, m.bpc, m.lay))
+                except AttributeError:
+                    pass
+            elif t == 'MSKP':
+                # WIG_AUTO phase 切换 marker (state machine 状态分析)
+                try:
+                    self.msk_phase_changes.append((ts, m.phase))
+                except AttributeError:
+                    pass
+            elif t == 'MSKR':
+                # WIG_AUTO armed 边沿 run config latch: cruise_mode / strat / profile / v_tgt
+                try:
+                    self.msk_run_starts.append((ts, m.mode, m.strat, m.prof, m.vtgt))
+                except AttributeError:
+                    pass
             elif t == 'GPS':
                 self.gps.append((ts, m.Spd, m.Alt))
             elif t == 'RCIN':
+                # ArduPlane 4.7 32-channel: RCIN.C1-14, RCIN2.C15-32. 这里只 C1-14 就够 (用户用 ch1-7).
                 self.rcin.append((ts, *[getattr(m,f'C{i}',0) for i in range(1,17)]))
             elif t == 'RCOU':
-                self.rcou.append((ts, *[getattr(m,f'C{i}',0) for i in range(1,17)]))
+                # ArduPlane 4.7+: RCOU 含 C1-C14 (SERVO 1-14), RCO2/RCO3 拆出后续
+                # 这里建一帧 (t, ch1..ch19), C15-C19 先填 0, 等 RCO2/RCO3 来 patch
+                vals = [getattr(m, f'C{i}', 0) for i in range(1, 15)]  # C1-C14 真实
+                vals.extend([0, 0, 0, 0, 0])  # C15-C19 占位
+                self.rcou.append((ts,) + tuple(vals))
+            elif t == 'RCO2':
+                # ArduPlane 4.7+ RCO2.C15-C18 = SERVO 15-18
+                if self.rcou:
+                    last = list(self.rcou[-1])
+                    # last = [t, ch1, ch2, ..., ch19] (1 + 19 = 20 长度)
+                    # ch_i 在 last[i] (1-indexed offset), C15 → last[15]
+                    for ch in (15, 16, 17, 18):
+                        v = getattr(m, f'C{ch}', 0)
+                        if v: last[ch] = v
+                    self.rcou[-1] = tuple(last)
+            elif t == 'RCO3':
+                # ArduPlane 4.7+ RCO3.C19+ = SERVO 19+
+                if self.rcou:
+                    last = list(self.rcou[-1])
+                    v = getattr(m, 'C19', 0)
+                    if v: last[19] = v
+                    self.rcou[-1] = tuple(last)
             elif t == 'BAT':
                 self.bat.append((ts, m.Volt, getattr(m,'Curr',0)))
+            elif t == 'MSK7':
+                # v9 P4: tilt 实际角度 abs° (相对机身), commanded/actual × 7 路
+                try:
+                    self.msk7.append((ts,
+                        m.cDl, m.cDr, m.cTl, m.cTr, m.cRl, m.cRr, m.cS,
+                        m.aDl, m.aDr, m.aTl, m.aTr, m.aRl, m.aRr, m.aS,
+                        getattr(m, 'CMP', 0)))
+                except AttributeError:
+                    pass
             elif t == 'MSG':
                 self._parse_msg(ts, getattr(m, 'Message', ''))
         self.duration = ts if self.first_t else 0
 
-    # v7 旧格式 (`MSK: NOGPS GEAR 2`) 和 v8 新格式 (`MSK mode -> GPS gear=2` / `MSK gear -> 2 (V2 hump)`) 都兼容
-    _RE_MSK_MODE   = re.compile(r'^MSK(?::\s*|\s+mode\s*->\s*)(NOGPS|GPS_WEAK|GPS_FULL|GPS)(?:\s*\(curve\))?\s*(?:GEAR\s*(\d+)|gear=(\d+))?')
-    _RE_MSK_GEAR   = re.compile(r'^MSK\s+gear\s*->\s*(\d+)')              # v8: MSK gear -> 2 (V2 hump)
-    _RE_MSK_AUTO   = re.compile(r'^MSK(?::\s*AUTO\s+(ON|OFF)|\s+auto\s*->\s*(AUTO|MANUAL))')
-    _RE_MSK_CHK    = re.compile(r'^MSK\s*CHK[:\s].*')
-    _RE_MSK_STOP   = re.compile(r'^MSK:\s*EMERGENCY STOP')
-    _RE_MSK_REL    = re.compile(r'^MSK:\s*emergency released')
-    _RE_MSK_ERR    = re.compile(r'^MSK ERR:\s*(.*)')
-    # v8 新增: 1Hz K 系数心跳 + RTL
-    _RE_MSK_K_HB   = re.compile(r'^MSK\s+K:\s*S=(\d+)\s+DF=(\d+)\s+T=(\d+)\s+RD=(\d+).*?spd=([\d.]+)/([\d.]+)')
-    _RE_MSK_RTL    = re.compile(r'^MSK\s+RTL\s+(ACTIVE|released)')
-    _RE_ATT_GUARD  = re.compile(r'^ATT GUARD:\s*P=([-0-9.]+)\(t=([-0-9.]+)\)\s*R=([-0-9.]+)\s*corr=([-0-9.]+)')
-    _RE_LUA_ERR    = re.compile(r'^Lua:\s*.*?:(\d+):\s*(.*)')
+    # ─── v7-v8 兼容 (老 BIN 还能解析, P5+ 不再产生) ───
+    _RE_MSK_MODE_OLD = re.compile(r'^MSK(?::\s*|\s+mode\s*->\s*)(NOGPS|GPS_WEAK|GPS_FULL|GPS)(?:\s*\(curve\))?\s*(?:GEAR\s*(\d+)|gear=(\d+))?')
+    _RE_MSK_GEAR_OLD = re.compile(r'^MSK\s+gear\s*->\s*(\d+)')
+    _RE_MSK_AUTO_OLD = re.compile(r'^MSK(?::\s*AUTO\s+(ON|OFF)|\s+auto\s*->\s*(AUTO|MANUAL))')
+    _RE_MSK_CHK_OLD  = re.compile(r'^MSK\s*CHK[:\s].*')
+    _RE_MSK_STOP_OLD = re.compile(r'^MSK:\s*EMERGENCY STOP')
+    _RE_MSK_REL_OLD  = re.compile(r'^MSK:\s*emergency released')
+    _RE_MSK_K_HB_OLD = re.compile(r'^MSK\s+K:\s*S=(\d+)\s+DF=(\d+)\s+T=(\d+)\s+RD=(\d+).*?spd=([\d.]+)/([\d.]+)')
+    _RE_MSK_RTL_OLD  = re.compile(r'^MSK\s+RTL\s+(ACTIVE|released)')
+    _RE_ATT_GUARD    = re.compile(r'^ATT GUARD:\s*P=([-0-9.]+)\(t=([-0-9.]+)\)\s*R=([-0-9.]+)\s*corr=([-0-9.]+)')
+    _RE_LUA_ERR      = re.compile(r'^Lua:\s*.*?:(\d+):\s*(.*)')
+    _RE_MSK_ERR      = re.compile(r'^MSK ERR:\s*(.*)')
+
+    # ─── v9 P6+ 新 STATUSTEXT (WIG dispatcher / phase / emergency) ───
+    _RE_WIG_DISPATCH = re.compile(r'^WIG dispatcher:\s*([-\d]+)\s*->\s*(\d+)')      # 17/27/29 mode 切换
+    _RE_WIG_PHASE    = re.compile(r'^WIG_AUTO phase\s*[→\->]+\s*(\w+)')             # FLOAT_TAXI/TRANS_A 等
+    _RE_WIG_RUN      = re.compile(r'^WIG_AUTO start:\s*profile=(\w+)\s+cruise=(\w+)\s+strat=(\w+)\s+V_TGT=([\d.]+)')
+    _RE_WIG_EMRG     = re.compile(r'^(?:WIG_AUTO L3 EMERG|MANUAL EMERG):\s*(.*)')
+    _RE_WIG_RECV     = re.compile(r'^WIG RECOVER:\s*throttle ramp')
+    _RE_WIG_ABORT    = re.compile(r'^WIG_AUTO\s+\S+\s*timeout\s*→\s*ABORT')
 
     def _parse_msg(self, ts, text):
         if not text: return
-        # 模式 + 档位 (v7 + v8 兼容)
-        m = self._RE_MSK_MODE.match(text)
+
+        # ═══ v9 P6+ 新 pattern (优先匹配, 现役格式) ═══
+        m = self._RE_WIG_DISPATCH.match(text)
+        if m:
+            # mode_changes 记 ArduPilot mode 切换 (17 MANUAL / 27 AUTO / 29 RECV)
+            new_mode = int(m.group(2))
+            mode_name = {17:'MANUAL', 27:'AUTO', 29:'RECV'}.get(new_mode, f'mode{new_mode}')
+            if not self.msk_mode_changes or self.msk_mode_changes[-1][1] != mode_name:
+                self.msk_mode_changes.append((ts, mode_name))
+            return
+        m = self._RE_WIG_PHASE.match(text)
+        if m:
+            # phase 切换文本记录 (MSKP marker 是数字; 这里是字符串)
+            self.msk_chk_events.append((ts, f'WIG_AUTO phase → {m.group(1)}'))
+            return
+        m = self._RE_WIG_RUN.match(text)
+        if m:
+            # armed 边沿 latch run config (跟 MSKR BIN marker 互补)
+            self.msk_auto_changes.append((ts, f'AUTO start: profile={m.group(1)} cruise={m.group(2)} strat={m.group(3)} V_TGT={m.group(4)}'))
+            return
+        if self._RE_WIG_EMRG.match(text):
+            self.msk_emergency.append((ts, 'EMERG ' + text[:80]))
+            return
+        if self._RE_WIG_RECV.match(text):
+            self.msk_emergency.append((ts, 'RECV ramp'))
+            return
+        if self._RE_WIG_ABORT.match(text):
+            self.msk_chk_events.append((ts, 'ABORT_L1: ' + text[:80]))
+            return
+
+        # ═══ v7-v8 老 pattern (兼容旧 BIN, P5+ 不产生但留着不影响) ═══
+        m = self._RE_MSK_MODE_OLD.match(text)
         if m:
             mode = m.group(1); gear = m.group(2) or m.group(3)
             if not self.msk_mode_changes or self.msk_mode_changes[-1][1] != mode:
@@ -170,54 +303,47 @@ class LogAnalyzer:
             if gear and (not self.msk_gear_changes or self.msk_gear_changes[-1][1] != int(gear)):
                 self.msk_gear_changes.append((ts, int(gear)))
             return
-        # v8 单独的档位事件 (`MSK gear -> 2 (V2 hump)`)
-        m = self._RE_MSK_GEAR.match(text)
+        m = self._RE_MSK_GEAR_OLD.match(text)
         if m:
             g = int(m.group(1))
             if not self.msk_gear_changes or self.msk_gear_changes[-1][1] != g:
                 self.msk_gear_changes.append((ts, g))
             return
-        # AUTO ON/OFF (v7 v8 兼容)
-        m = self._RE_MSK_AUTO.match(text)
+        m = self._RE_MSK_AUTO_OLD.match(text)
         if m:
             v = m.group(1) or m.group(2)
             self.msk_auto_changes.append((ts, v))
             return
-        # v8: 1Hz K 心跳
-        m = self._RE_MSK_K_HB.match(text)
+        m = self._RE_MSK_K_HB_OLD.match(text)
         if m:
             self.msk_k_history.append((ts,
                 int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)),
                 float(m.group(5)), float(m.group(6))))
             return
-        # v8: RTL 状态
-        m = self._RE_MSK_RTL.match(text)
+        m = self._RE_MSK_RTL_OLD.match(text)
         if m:
             self.msk_rtl_changes.append((ts, m.group(1)))
             return
-        # 预检
-        if self._RE_MSK_CHK.match(text):
+        if self._RE_MSK_CHK_OLD.match(text):
             self.msk_chk_events.append((ts, text.strip()))
             return
-        # 紧急停车
-        if self._RE_MSK_STOP.match(text):
+        if self._RE_MSK_STOP_OLD.match(text):
             self.msk_emergency.append((ts, 'STOP'))
             return
-        if self._RE_MSK_REL.match(text):
+        if self._RE_MSK_REL_OLD.match(text):
             self.msk_emergency.append((ts, 'released'))
             return
-        # MSK ERR (pcall 包裹的错误)
+
+        # ═══ Lua / Plane 通用 ═══
         m = self._RE_MSK_ERR.match(text)
         if m:
             self.msk_errors.append((ts, m.group(1)))
             return
-        # 姿态保护介入
         m = self._RE_ATT_GUARD.match(text)
         if m:
             self.msk_att_guard.append((ts, float(m.group(1)), float(m.group(2)),
                                        float(m.group(3)), float(m.group(4))))
             return
-        # Lua 原生 runtime error (未被 pcall 捕获的)
         m = self._RE_LUA_ERR.match(text)
         if m:
             self.msk_errors.append((ts, f'LINE {m.group(1)}: {m.group(2)}'))
@@ -239,15 +365,20 @@ class LogAnalyzer:
         print(colored("\n" + "="*72, C.CYN))
         print(colored("  1. SERVO 配置检查", C.CYN+C.BOLD))
         print(colored("="*72, C.CYN))
-        # Motor1-14 + Tilt Servo 15/16 (Scripting1/2 for DFL/DFR tilts)
+        # v9 P4: 12 EDF (motor 1-12) + 7 倾转 (SERVO 13-19)
+        # SERVO1-8 = motor function 33-40 (k_motor1..8)
+        # SERVO9-12 = motor function 82-85 (k_motor9..12)
+        # SERVO13-19 = scripting function 94-100 (k_scripting1..7)
         expected = {1:33,2:34,3:35,4:36,5:37,6:38,7:39,8:40,
-                    9:82,10:83,11:84,12:85,13:160,14:161,
-                    15:94, 16:95}
+                    9:82,10:83,11:84,12:85,
+                    13:94, 14:95, 15:96, 16:97, 17:98, 18:99, 19:100}
         label = {1:'M1 SL1',2:'M2 SL2',3:'M3 SR1',4:'M4 SR2',
-                 5:'M5 DFL',6:'M6 DFR',7:'M7 DML',8:'M8 DMR',
-                 9:'M9 TL1',10:'M10 TL2',11:'M11 TR1',12:'M12 TR2',
-                 13:'M13 RDL (CAN)',14:'M14 RDR (CAN)',
-                 15:'TILT DFL (CAN)',16:'TILT DFR (CAN)'}
+                 5:'M5 DFL',6:'M6 DFR',7:'M7 TL1',8:'M8 TL2',
+                 9:'M9 TR1',10:'M10 TR2',11:'M11 RDL',12:'M12 RDR',
+                 13:'TILT DFL (CAN)',14:'TILT DFR (CAN)',
+                 15:'TILT TL1 (CAN)',16:'TILT TR1 (CAN)',
+                 17:'TILT RDL (CAN)',18:'TILT RDR (CAN)',
+                 19:'TILT SGRP (CAN)'}
         all_ok = True
         for ch, exp in expected.items():
             key = f'SERVO{ch}_FUNCTION'
@@ -391,7 +522,10 @@ class LogAnalyzer:
             rolls = [r for _,r,_ in samples_att]
             print(f"\n  ── {colored(name, C.CYN+C.BOLD)} ({start:.1f}~{end:.1f}s, {end-start:.1f}s) ──")
             print(f"    速度: {min(samples_gps):.1f} → {max(samples_gps):.1f}  avg {sum(samples_gps)/len(samples_gps):.1f} m/s")
-            print(f"    俯仰: min={min(pitches):5.1f}° max={max(pitches):5.1f}° avg={sum(pitches)/len(pitches):5.1f}°")
+            # ATT.Pitch 是 VIEW (VTOL), 加 Q_TRIM_PITCH 才是 body 绝对角度
+            q_trim_pitch = self.params.get('Q_TRIM_PITCH', 0.0)
+            avg_view = sum(pitches)/len(pitches)
+            print(f"    俯仰 view: min={min(pitches):5.1f}° max={max(pitches):5.1f}° avg={avg_view:5.1f}° (+ Q_TRIM={q_trim_pitch:.1f} = body)")
             print(f"    横滚: min={min(rolls):5.1f}° max={max(rolls):5.1f}°")
             # 油门
             thrs = [c2 for _,c2 in samples_rci]
@@ -491,19 +625,31 @@ class LogAnalyzer:
     # ═══ 7. 姿态超限检测 ═══
     def attitude_check(self):
         print(colored("\n" + "="*72, C.CYN))
-        print(colored("  7. 姿态超限（解锁时段）", C.CYN+C.BOLD))
+        print(colored("  7. 姿态超限 (P7.8p: 优先用 MSK4.pa body, fallback ATT.Pitch view+Q_TRIM)", C.CYN+C.BOLD))
         print(colored("="*72, C.CYN))
+        # P7.8p: 优先 MSK4.pa (lua 直接 body, 单位 deg); fallback ATT.Pitch + Q_TRIM_PITCH (view→body)
+        # memory: feedback_ahrs_pitch_is_body.md
+        q_trim = self.params.get('Q_TRIM_PITCH', 0.0)
         for start, end in self.armed_periods:
-            samples = [(t,r,p) for t,r,p,*_ in self.att if start <= t <= end]
-            if not samples: continue
-            rolls = [r for _,r,_ in samples]
-            pitches = [p for _,_,p in samples]
+            # 试 MSK4 (body 帧, P6+ lua 写)
+            msk4_samples = [(t, m[3], m[0]) for m in self.msk4 if start <= (t := m[0]) <= end]  # (t, ra, pa)
+            if msk4_samples:
+                rolls = [r for _,r,_ in msk4_samples]
+                pitches = [p for _,_,p in msk4_samples]
+                src = 'MSK4 body'
+            else:
+                # fallback: ATT.Pitch 是 view, + Q_TRIM 才是 body
+                samples = [(t,r,p) for t,r,p,*_ in self.att if start <= t <= end]
+                if not samples: continue
+                rolls = [r for _,r,_ in samples]
+                pitches = [p + q_trim for _,_,p in samples]  # view → body
+                src = f'ATT view + Q_TRIM={q_trim:.1f}'
             max_r = max(abs(min(rolls)), abs(max(rolls)))
             max_p_pos = max(pitches)
             max_p_neg = abs(min(pitches))
             flag_r = colored("⚠", C.RED) if max_r > 30 else (colored("⚠", C.YEL) if max_r > 15 else colored("✓", C.GRN))
             flag_p = colored("⚠", C.RED) if max_p_pos > 30 or max_p_neg > 20 else colored("✓", C.GRN)
-            print(f"  t={start:6.1f}~{end:6.1f}s  P:{min(pitches):+6.1f}~{max(pitches):+6.1f}° {flag_p}  R:±{max_r:5.1f}° {flag_r}")
+            print(f"  t={start:6.1f}~{end:6.1f}s  body P:{min(pitches):+6.1f}~{max(pitches):+6.1f}° {flag_p}  R:±{max_r:5.1f}° {flag_r}  [{src}]")
             if max_r > 60:
                 self.warnings.append(f"t={start:.0f}-{end:.0f}: 横滚 {max_r:.0f}° 可能翻飞")
             if max_p_pos > 30:
@@ -512,17 +658,27 @@ class LogAnalyzer:
     # ═══ 8. 开关位置时间线 ═══
     def switch_timeline(self):
         print(colored("\n" + "="*72, C.CYN))
-        print(colored("  8. 开关位置变化（mode/gear/auto）", C.CYN+C.BOLD))
+        print(colored("  8. 开关位置变化 (v9 P7.7+: ch6=FLTMODE 切 mode 17/27/29, ch7=phase/profile, ch8=preflight)", C.CYN+C.BOLD))
         print(colored("="*72, C.CYN))
-        # Track ch6 (mode), ch7 (gear), ch9 (auto)
-        ch_names = {6:'MODE', 7:'GEAR', 9:'AUTO'}
-        last = {6:None, 7:None, 9:None}
+        # v9 P7.7: ch6 = ArduPlane FLTMODE_CH 切 mode 17 MANUAL / 27 AUTO / 29 RECV
+        #          ch7 = MANUAL phase (TAXI/TRANS/CRUISE) 或 AUTO profile (MATRIX/TURN/CRUISE armed latch)
+        #          ch8 = preflight (高+disarmed → orchestrator sweep)
+        ch_names = {6:'ch6 mode', 7:'ch7 phase/prof', 8:'ch8 preflt'}
+        last = {6:None, 7:None, 8:None}
         for ts, *chs in self.rcin:
             for ch, name in ch_names.items():
                 v = chs[ch-1]
-                if v < 1300: pos = '低'
-                elif v < 1700: pos = '中'
-                else: pos = '高'
+                if ch == 6:
+                    # FLTMODE 实测阈值 (P7.7): <1490 → 17, 1490-1620 → 27, >=1620 → 29
+                    if v < 1490: pos = 'MANUAL(17)'
+                    elif v < 1620: pos = 'AUTO(27)'
+                    else: pos = 'RECV(29)'
+                elif ch == 7:
+                    if v < 1300: pos = 'low (TAXI/MATRIX)'
+                    elif v < 1700: pos = 'mid (TRANS/TURN)'
+                    else: pos = 'high (CRUISE)'
+                else:  # ch8
+                    pos = 'PREFLT (高+disarmed)' if v > 1700 else 'idle'
                 if last[ch] != pos:
                     if last[ch] is not None:
                         print(f"  t={ts:6.1f}s  {name}: {last[ch]} → {pos} (PWM {v})")
@@ -574,6 +730,83 @@ class LogAnalyzer:
             print(f"  ... ({len(self.msk_chk_events)-40} 更多事件省略)")
 
     # ═══ 11. 紧急停车 / Lua 错误 ═══
+    # ═══ 12. WIG_AUTO state machine + V_PI + drift + layer 分析 (P7.8p) ═══
+    def wig_state_analysis(self):
+        has_any = (self.msk_phase_changes or self.msk_run_starts or
+                   self.msk5 or self.msk6 or self.msk8)
+        if not has_any:
+            return
+        print(colored("\n" + "="*72, C.CYN))
+        print(colored(" 12. WIG state machine + V_PI + drift + layer (MSK5/6/8/P/R)", C.CYN+C.BOLD))
+        print(colored("="*72, C.CYN))
+
+        # ── ArduPilot mode 切换 (BIN MODE message, 17/27/29 解码)
+        if self.modes:
+            print(colored("  [ArduPilot mode 切换 (BIN MODE)]", C.CYN))
+            for ts, name, num in self.modes[:20]:
+                col = C.RED if num == 29 else (C.YEL if num == 27 else C.GRN)
+                print(f"  t={ts:7.1f}s  mode={num} {colored(str(name), col)}")
+            if len(self.modes) > 20:
+                print(f"  ... ({len(self.modes)-20} 更多)")
+
+        # ── phase 切换序列 (state machine flow)
+        if self.msk_phase_changes:
+            phase_names = ['IDLE','FLOAT_TAXI','TRANS_A','TRANS_B','TRANS_C','CRUISE','TURN',
+                          'DECEL_A','DECEL_B','DECEL_C','ABORT_L1','EMERGENCY']
+            print(colored("  [phase 状态机]", C.CYN))
+            for ts, p in self.msk_phase_changes[:40]:
+                name = phase_names[int(p)] if 0 <= int(p) < len(phase_names) else f'?{int(p)}'
+                print(f"  t={ts:7.1f}s  phase → {colored(name, C.CYN)}")
+            if len(self.msk_phase_changes) > 40:
+                print(f"  ... ({len(self.msk_phase_changes)-40} 更多)")
+
+        # ── armed 边沿 run latch (cruise_mode/strat/profile/v_tgt)
+        if self.msk_run_starts:
+            print(colored("\n  [armed 边沿 run config latch]", C.CYN))
+            for ts, mode, strat, prof, vtgt in self.msk_run_starts[:10]:
+                cn = {0:'FRONT_VENT',1:'REAR_VENT'}.get(int(mode), f'?{int(mode)}')
+                sn = {0:'STEADY',1:'BURST'}.get(int(strat), f'?{int(strat)}')
+                pn = {0:'MATRIX',1:'TURN',2:'CRUISE'}.get(int(prof), f'?{int(prof)}')
+                print(f"  t={ts:7.1f}s  cruise={cn}  strat={sn}  profile={pn}  V_TGT={vtgt:.1f} m/s")
+
+        # ── V_PI 速度环饱和分析 (MSK5: vt, va, ve, ko, la)
+        if self.msk5:
+            print(colored("\n  [V_PI 速度环 (1Hz)]", C.CYN))
+            errs = [s[3] for s in self.msk5]  # ve = v_target - v_actual
+            kos  = [s[4] for s in self.msk5]  # ko = kt correction
+            las  = [int(s[5]) for s in self.msk5]  # layer
+            saturated = sum(1 for k in kos if abs(k) > 0.28)  # |ko| > 0.28 接近 ±0.3 clamp
+            print(f"  V_err: min={min(errs):+.2f} max={max(errs):+.2f} avg={sum(errs)/len(errs):+.2f} m/s")
+            print(f"  KT correction: min={min(kos):+.3f} max={max(kos):+.3f} avg={sum(kos)/len(kos):+.3f}")
+            if saturated > 0:
+                pct = saturated * 100 / len(kos)
+                print(colored(f"  ⚠ V_PI 饱和 (|ko|>0.28) 占 {saturated}/{len(kos)} = {pct:.0f}%", C.YEL))
+                if pct > 30:
+                    self.warnings.append(f"V_PI 饱和率 {pct:.0f}% > 30%, target 偏高或 motor 推力不足")
+            # layer 时间分布 (0=L1 / 1=L1 boost / 2=L2 SGRP / 3=L3 极限)
+            from collections import Counter
+            layer_dist = Counter(las)
+            total = len(las)
+            print(f"  Layer 时间分布:", end='')
+            for L in sorted(layer_dist.keys()):
+                pct = layer_dist[L] * 100 / total
+                col = C.GRN if L < 2 else (C.YEL if L == 2 else C.RED)
+                print(colored(f"  L{L}={pct:.0f}%", col), end='')
+            print()
+            if layer_dist.get(3, 0) > 0:
+                self.warnings.append(f"Layer 3 (机械极限) 触发 {layer_dist[3]} 次")
+
+        # ── K_drift 累积 (MSK6: ks_d, kdf_d, kt_d, krd_d)
+        if self.msk6:
+            print(colored("\n  [K_drift 累积 (lua 内学, 不写 EEPROM)]", C.CYN))
+            last = self.msk6[-1]
+            print(f"  最终值: KS={last[1]:+.3f}  KDF={last[2]:+.3f}  KT={last[3]:+.3f}  KRD={last[4]:+.3f}")
+            for i, name in enumerate(['KS','KDF','KT','KRD'], 1):
+                vals = [s[i] for s in self.msk6]
+                mx = max(abs(min(vals)), abs(max(vals)))
+                if mx > 0.1:
+                    print(colored(f"  ⚠ {name}_drift 峰值 |{mx:.3f}| > 0.1, 控制律 trim 不当", C.YEL))
+
     def msk_anomalies(self):
         has_any = self.msk_emergency or self.msk_errors or self.msk_att_guard
         if not has_any:
@@ -605,33 +838,154 @@ class LogAnalyzer:
         if not self.rcou:
             return
         print(colored("\n" + "="*72, C.CYN))
-        print(colored(" 12. 倾转舵 (SERVO15/16) 输出验证", C.CYN+C.BOLD))
+        print(colored(" 12. 7 倾转舵 (SERVO13-19) 输出验证", C.CYN+C.BOLD))
         print(colored("="*72, C.CYN))
-        lz = self.params.get('MSK_TILT_L_ZERO', 1500)
-        rz = self.params.get('MSK_TILT_R_ZERO', 1500)
-        ld = self.params.get('MSK_TILT_L_DIR', 1)
-        rd = self.params.get('MSK_TILT_R_DIR', -1)
-        uspd = self.params.get('MSK_TILT_USPD', 8.0)
-        tmax = self.params.get('MSK_TILT_DEG', 30)
-        print(f"  校准: L_ZERO={lz:.0f} L_DIR={ld:+.0f}  R_ZERO={rz:.0f} R_DIR={rd:+.0f}  USPD={uspd:.1f}μs/°  MAX={tmax:.0f}°")
-        vl = [p[15] for p in self.rcou if len(p) > 15]  # ch15 = index 15
-        vr = [p[16] for p in self.rcou if len(p) > 16]
-        if not vl or not vr:
-            print("  RCOU 无 C15/C16 数据")
+        # v9 P4 7 个 tilt: SERVO13(DFL) 14(DFR) 15(TL1) 16(TR1) 17(RDL) 18(RDR) 19(SGRP)
+        tilt_chans = [(13,'DFL'),(14,'DFR'),(15,'TL1'),(16,'TR1'),
+                      (17,'RDL'),(18,'RDR'),(19,'SGRP')]
+        pwm_per_deg = self.params.get('TLT_PWM_PER_DEG', 11.11)
+        print(f"  全局 PWM/° = {pwm_per_deg:.2f}μs/°")
+        for ch, name in tilt_chans:
+            zero = self.params.get(f'TLT_{name}_ZERO')
+            dir_v = self.params.get(f'TLT_{name}_DIR')
+            lmin = self.params.get(f'TLT_{name}_LMIN')
+            lmax = self.params.get(f'TLT_{name}_LMAX')
+            idx = ch - 1  # rcou idx = SERVO ch - 1
+            vals = [p[idx] for p in self.rcou if len(p) > idx]
+            if not vals:
+                print(f"  S{ch:2d} {name:5s}: RCOU 无数据")
+                continue
+            mn, mx, av = min(vals), max(vals), sum(vals)/len(vals)
+            zfmt = f"Z={zero:.0f}" if zero is not None else "Z=?"
+            dfmt = f"D={dir_v:+.0f}" if dir_v is not None else "D=?"
+            limfmt = f"L=[{lmin:.0f},{lmax:.0f}]" if lmin is not None and lmax is not None else ""
+            print(f"  S{ch:2d} {name:5s} {zfmt} {dfmt} {limfmt} | PWM min={mn:.0f} max={mx:.0f} avg={av:.0f}")
+            if dir_v is not None and dir_v == 0:
+                print(colored(f"        ⚠ DIR=0 (锁定输出 ZERO PWM, 实机故意未校准)", C.YEL))
+
+        # v9 P4: MSK7 角度直接 (相对机身, lua 内部计算的 abs°, 不依赖 ZERO 标定反推)
+        if self.msk7:
+            print()
+            print(colored(" ─── MSK7 倾转角度 (abs°相对机身, commanded 加 ATC bias 后) ───", C.CYN))
+            # 字段顺序: t, cDl,cDr,cTl,cTr,cRl,cRr,cS, aDl,aDr,aTl,aTr,aRl,aRr,aS, CMP
+            names = ['DFL','DFR','TL1','TR1','RDL','RDR','SGRP']
+            print(f"  {'路':5s}  {'cmd 范围':>12s}  {'actual 范围':>12s}  {'commanded 平均':>10s}")
+            for i, n in enumerate(names):
+                # 过滤 corrupted (log 有 bad header 噪声让某些字段超出物理 range)
+                cmds = [r[1+i] for r in self.msk7 if -360 <= r[1+i] <= 360]
+                acts = [r[8+i] for r in self.msk7 if -360 <= r[8+i] <= 360]
+                if not cmds: continue
+                cmd_min, cmd_max, cmd_avg = min(cmds), max(cmds), sum(cmds)/len(cmds)
+                act_min, act_max = min(acts), max(acts)
+                clamp_warn = ''
+                if cmd_max > act_max + 1: clamp_warn = ' ⚠ commanded 超 actual (撞 LMAX)'
+                if cmd_min < act_min - 1: clamp_warn += ' ⚠ commanded 低 actual (撞 LMIN)'
+                print(f"  {n:5s}  {cmd_min:>5.0f}~{cmd_max:>5.0f}°  {act_min:>5.0f}~{act_max:>5.0f}°  {cmd_avg:>+8.1f}°{clamp_warn}")
+
+    # ═══ 13. 参数修改建议 (heuristic) ═══
+    def suggest_params(self):
+        import statistics
+        print(colored("\n" + "="*72, C.CYN))
+        print(colored(" 13. 参数修改建议 (heuristic, 仅供参考)", C.CYN+C.BOLD))
+        print(colored("="*72, C.CYN))
+
+        suggestions = []   # list of (severity, current, suggested, reason)
+
+        # 用 armed 段为基础 (近似 cruise)
+        for start, end in self.armed_periods:
+            if end - start < 10: continue   # 太短忽略
+
+            # ── 1. pitch 振荡 (body std-dev) ──
+            pitches = [m[1] for m in self.msk4 if start <= m[0] <= end]
+            if len(pitches) >= 50:
+                p_std = statistics.stdev(pitches)
+                if p_std > 3.0:
+                    cur = self.params.get('Q_A_RAT_PIT_D', 0.004)
+                    suggestions.append(('⚠', 'pitch 振荡',
+                        f'body std={p_std:.1f}° > 3° (t={start:.0f}-{end:.0f}s)',
+                        f'Q_A_RAT_PIT_D {cur:.4f} → {cur*1.5:.4f} (加 50% D 阻尼) 或 Q_A_RAT_PIT_P 减 20%'))
+
+            # ── 2. roll 振荡 ──
+            rolls = [m[3] for m in self.msk4 if start <= m[0] <= end]
+            if len(rolls) >= 50:
+                r_std = statistics.stdev(rolls)
+                if r_std > 3.0:
+                    cur = self.params.get('Q_A_RAT_RLL_D', 0.004)
+                    suggestions.append(('⚠', 'roll 振荡',
+                        f'body std={r_std:.1f}° > 3°',
+                        f'Q_A_RAT_RLL_D {cur:.4f} → {cur*1.5:.4f} (加 D)'))
+
+            # ── 3. yaw 振荡 / drift (从 ATT) ──
+            yaws = [y for t,r,p,y in self.att if start <= t <= end and -360 <= y <= 360]
+            if len(yaws) >= 50:
+                # 标准差检测振荡
+                y_std = statistics.stdev(yaws)
+                # 偏入口检测 drift (= 后 1/3 mean vs 前 1/3 mean)
+                third = len(yaws) // 3
+                if third > 5:
+                    early_mean = sum(yaws[:third]) / third
+                    late_mean  = sum(yaws[-third:]) / third
+                    drift = abs(((late_mean - early_mean + 540) % 360) - 180)
+                else:
+                    drift = 0
+                if y_std > 5.0:
+                    kd = self.params.get('WIGA_HDG_KD', 10.0)
+                    suggestions.append(('⚠', 'yaw 振荡',
+                        f'yaw std={y_std:.1f}° > 5°',
+                        f'WIGA_HDG_KD {kd:.1f} → {kd*1.5:.1f} (加 D 阻尼) 或 WIGA_HDG_KP 减 30%'))
+                if drift > 10.0:
+                    kp = self.params.get('WIGA_HDG_KP', 45.0)
+                    suggestions.append(('⚠', 'yaw drift',
+                        f'前→后 drift={drift:.1f}° > 10°',
+                        f'WIGA_HDG_KP {kp:.0f} → {kp*1.3:.0f} (加 P 收紧)'))
+
+            # ── 4. V_PI saturate (Layer 2 占比) ──
+            if self.msk5:
+                seg5 = [m for m in self.msk5 if start <= m[0] <= end]
+                if len(seg5) >= 5:
+                    sat = sum(1 for m in seg5 if m[5] >= 2) / len(seg5)
+                    if sat > 0.2:
+                        kt = self.params.get('MSK_BST_KT', 1.0)
+                        suggestions.append(('⚠', 'V_PI saturate',
+                            f'Layer≥2 占比 {sat*100:.0f}% > 20%',
+                            f'MSK_BST_KT {kt:.2f} → {kt*1.2:.2f} (加速主推) 或 WIGA_V_TGT 降 1 m/s'))
+
+            # ── 5. pitch 跟不上 target (|pa - pb| 大) ──
+            if len(self.msk4) >= 50:
+                segm = [m for m in self.msk4 if start <= m[0] <= end]
+                if segm:
+                    errs = [abs(m[1] - m[2]) for m in segm]  # |pa - pb|
+                    avg_err = sum(errs) / len(errs)
+                    if avg_err > 5.0:
+                        cur = self.params.get('Q_A_RAT_PIT_P', 0.135)
+                        suggestions.append(('⚠', 'pitch 跟不上',
+                            f'avg |pa-pb|={avg_err:.1f}° > 5°',
+                            f'Q_A_RAT_PIT_P {cur:.3f} → {cur*1.3:.3f} 或 MSK_BST_KDF 加 0.05'))
+
+        # ── 6. envelope abort 频次 ──
+        env_aborts = sum(1 for _,t in self.msk_emergency if 'ENVELOPE' in (t or '').upper())
+        if env_aborts > 0:
+            p_env = self.params.get('WIGA_P_ENV_W', 20)
+            suggestions.append(('⚠', 'envelope abort 触发',
+                f'{env_aborts} 次 ABORT (WIGA_P_ENV_W={p_env}°)',
+                f'若属误触发, P_ENV_W → {p_env+5}°. 若真翻车, 不改, 排查 K 表 / heading'))
+
+        # ── 7. TRANS_A timeout (从 STATUSTEXT 查) ──
+        # msk_errors / msk_emergency 含 STATUSTEXT 关键字
+        ta_to = sum(1 for _, txt in self.msk_emergency if 'TRANS_A' in (txt or '') and 'timeout' in (txt or '').lower())
+        if ta_to > 0:
+            tol = self.params.get('WIGK_TX_A_TOL', 2.0)
+            suggestions.append(('⚠', 'TRANS_A timeout',
+                f'{ta_to} 次 (pitch 没到 BTRIM tol={tol}°)',
+                f'WIGK_TX_A_TOL {tol:.1f} → {tol+1:.1f} 放宽容差 或 WIGA_TX_TO_MS 加 2000ms'))
+
+        if not suggestions:
+            print(colored('  ✓ 数据看着 OK, 无明显参数调整建议', C.GRN))
             return
-        print(f"  DFL  (S15) min={min(vl):4.0f} max={max(vl):4.0f} avg={sum(vl)/len(vl):6.0f}")
-        print(f"  DFR  (S16) min={min(vr):4.0f} max={max(vr):4.0f} avg={sum(vr)/len(vr):6.0f}")
-        # 镜像验证: L-ZERO 和 R-ZERO 偏移方向应该相反 (用 DIR 加权同角度应该都增或都减)
-        # 测试: 倾 15° → PWM_L = LZ + LD*15*USPD, PWM_R = RZ + RD*15*USPD
-        pwm_l_15 = lz + ld * 15 * uspd
-        pwm_r_15 = rz + rd * 15 * uspd
-        print(f"  15° 位置预期: L={pwm_l_15:.0f}  R={pwm_r_15:.0f}")
-        # 如果实测范围都没达到预期，警告
-        if max(vl) < pwm_l_15 - 30 and max(vl) > 1400:
-            self.warnings.append(f"DFL 最大 PWM {max(vl):.0f} 未达 15° 预期 {pwm_l_15:.0f}")
-        if (ld > 0 and rd > 0) or (ld < 0 and rd < 0):
-            self.warnings.append(f"DIR 方向同号 (L={ld:+.0f} R={rd:+.0f}), 镜像错误!")
-            print(colored(f"  ✗ DIR 方向同号, 应为一正一负!", C.RED))
+        for sev, sym, reason, sugg in suggestions:
+            print(colored(f'  {sev} {sym}', C.YEL+C.BOLD))
+            print(f'    数据: {reason}')
+            print(colored(f'    建议: {sugg}', C.CYN))
 
     # ═══ 主报告 ═══
     def report(self):
@@ -656,8 +1010,11 @@ class LogAnalyzer:
         self.msk_timeline()
         self.preflight_events()
         self.msk_anomalies()
+        self.wig_state_analysis()   # P7.8p: MSK5/6/8 + MSKP/MSKR 综合
+        self.suggest_params()        # P7.8ω: heuristic 参数建议
 
         # 总结
+        # noop reach
         print(colored("\n" + "="*72, C.BOLD))
         if self.warnings:
             print(colored(f"  ⚠ 检测到 {len(self.warnings)} 个问题", C.RED+C.BOLD))
@@ -726,9 +1083,11 @@ def make_plot(analyzer, path):
         t = [x[0] for x in analyzer.gps]
         v = [x[1] for x in analyzer.gps]
         axes[0].plot(t, v, 'b-', lw=1)
-        axes[0].axhline(y=4, color='gray', ls='--', alpha=0.5, label='V1=4')
-        axes[0].axhline(y=8, color='orange', ls='--', alpha=0.5, label='V2=8')
-        axes[0].axhline(y=14, color='green', ls='--', alpha=0.5, label='V3=14')
+        # P7: 撤老 V1/V2/V3 PCHIP 速度断点, 改 WIGA_V_TGT (CRUISE 目标速度)
+        v_tgt = self.params.get('WIGA_V_TGT', 9.0)
+        axes[0].axhline(y=v_tgt, color='green', ls='--', alpha=0.5, label=f'WIGA_V_TGT={v_tgt:.1f}')
+        v_min = self.params.get('WIGA_DEC_V_B', 2.0)
+        axes[0].axhline(y=v_min, color='orange', ls='--', alpha=0.5, label=f'DEC_V_B={v_min:.1f}')
         axes[0].set_ylabel('Speed (m/s)')
         axes[0].legend(loc='upper right', fontsize=8)
         axes[0].grid(True, alpha=0.3)

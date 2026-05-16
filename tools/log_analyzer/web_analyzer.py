@@ -314,9 +314,11 @@ def analyze():
                 t = [x[0] for x in analyzer.gps]
                 v = [x[1] for x in analyzer.gps]
                 axes[0].plot(t, v, 'b-', lw=1)
-                axes[0].axhline(y=4, color='gray', ls='--', alpha=0.5, label='V1=4')
-                axes[0].axhline(y=8, color='orange', ls='--', alpha=0.5, label='V2=8')
-                axes[0].axhline(y=14, color='green', ls='--', alpha=0.5, label='V3=14')
+                # P7: 撤老 V1/V2/V3 PCHIP 速度断点, 改 WIGA_V_TGT
+                v_tgt = analyzer.params.get('WIGA_V_TGT', 9.0)
+                axes[0].axhline(y=v_tgt, color='green', ls='--', alpha=0.5, label=f'V_TGT={v_tgt:.1f}')
+                v_min = analyzer.params.get('WIGA_DEC_V_B', 2.0)
+                axes[0].axhline(y=v_min, color='orange', ls='--', alpha=0.5, label=f'DEC_V_B={v_min:.1f}')
                 axes[0].set_ylabel('Speed (m/s)')
                 axes[0].legend(loc='upper right', fontsize=8)
                 axes[0].grid(True, alpha=0.3)

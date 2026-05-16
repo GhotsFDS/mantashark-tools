@@ -237,6 +237,15 @@ class Bridge:
         self._comp = self.mav.target_component
         print(f'[bridge] ✓ FC sys={self._sys} comp={self._comp} type={m.type}')
 
+        # P7.7: 显式请求 NAMED_VALUE_FLOAT 流 (默认不发, lua mixer.get_live_factors 推 5 路 K_eff+LAYER)
+        # MAV_CMD_SET_MESSAGE_INTERVAL = 511, msg_id NAMED_VALUE_FLOAT = 251, 200000us = 5Hz
+        try:
+            self.mav.mav.command_long_send(self._sys, self._comp, 511, 0,
+                                           251, 200000, 0, 0, 0, 0, 0)
+            print('[bridge] requested NAMED_VALUE_FLOAT @ 5Hz')
+        except Exception as e:
+            print(f'[bridge] warn: NAMED_VALUE_FLOAT interval request 失败: {e}')
+
         # 起 MP forward 出口 (Mission Planner / QGC 接这些 UDP 端点)
         for spec in self.mp_outs:
             try:
@@ -285,7 +294,8 @@ class Bridge:
             if t == 'HEARTBEAT':
                 flight_mode = mavutil.mode_string_v10(m) if hasattr(mavutil, 'mode_string_v10') else str(m.custom_mode)
                 armed = (m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
-                data = {'type': 'heartbeat', 'mode': flight_mode, 'armed': armed}
+                # custom_mode 数字暴露给前端 — Plane 自定义 27/29 mode_string_v10 返回 "Mode(27)" 无法识别
+                data = {'type': 'heartbeat', 'mode': flight_mode, 'custom_mode': int(m.custom_mode), 'armed': armed}
             elif t == 'ATTITUDE':
                 data = {'type': 'attitude',
                         'roll':  math.degrees(m.roll),
@@ -349,6 +359,9 @@ class Bridge:
             elif t == 'RC_CHANNELS':
                 chans = [getattr(m, f'chan{i}_raw', 0) for i in range(1, 13)]   # 12 路
                 data = {'type': 'rc', 'channels': chans}
+            elif t == 'NAMED_VALUE_FLOAT':
+                name = str(m.name).rstrip('\x00')
+                data = {'type': 'named_float', 'name': name, 'value': float(m.value)}
             elif t == 'SERVO_OUTPUT_RAW':
                 # ArduPilot 实际单帧发 16 路 (v2 extension: servo1..16_raw):
                 #   port=0 → SERVO 1-16, port=1 → SERVO 17-32 (Plane NUM_SERVO_CHANNELS=32)
