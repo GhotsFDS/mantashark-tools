@@ -916,7 +916,7 @@ class LogAnalyzer:
                         f'Q_A_RAT_RLL_D {cur:.4f} → {cur*1.5:.4f} (加 D)'))
 
             # ── 3. yaw 振荡 / drift (从 ATT) ──
-            yaws = [y for t,r,p,y in self.att if start <= t <= end and -360 <= y <= 360]
+            yaws = [r[3] for r in self.att if start <= r[0] <= end and -360 <= r[3] <= 360]
             if len(yaws) >= 50:
                 # 标准差检测振荡
                 y_std = statistics.stdev(yaws)

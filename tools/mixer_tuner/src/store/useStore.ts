@@ -143,7 +143,7 @@ export const useStore = create<AppState & Actions>()(
         }
         if (!persisted || version < 8) {
           // v8: P7.8ω 加 SCR_ENABLE / Q_FRAME_CLASS / EK3_SRC1_YAW / COMPASS_USE /
-          // Q_A_RAT_YAW_P/I/D / Q_A_ANG_YAW_P / WIGK_HDG_HOLD_EN 等. 重 fill default.
+          // Q_A_RAT_YAW_P/I/D / Q_A_ANG_YAW_P / WIGA_HDG_HOLD_EN 等. 重 fill default.
           if (persisted.params) {
             const cleaned: Record<string, number> = {};
             for (const k of Object.keys(DEFAULT_PARAMS)) {

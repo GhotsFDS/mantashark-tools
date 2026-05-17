@@ -21,18 +21,15 @@ import { paramRange } from '../../lib/defaults';
 import { NumInput } from '../common/NumInput';
 import { AlertTriangle, Gauge, RotateCcw, Send, Save } from 'lucide-react';
 
-// ───────────────────────────── Phase 状态机 ─────────────────────────────
+// ───────────────────────────── Phase 状态机 (P7.9.4: 6 phase) ─────────────────────────────
 const PHASE_NAMES = [
-  'IDLE', 'FLOAT_TAXI', 'TRANS_A', 'TRANS_B', 'TRANS_C',
-  'CRUISE', 'TURN', 'DECEL_A', 'DECEL_B', 'DECEL_C',
-  'ABORT_L1', 'EMERGENCY',
+  'IDLE', 'FLOAT_TAXI', 'TRANSITION', 'CRUISE', 'DECEL', 'EMERGENCY',
 ] as const;
 type PhaseName = typeof PHASE_NAMES[number];
 
 // 用户视图上的"主链" — 异常 phase 不在线性流程里
 const MAIN_FLOW: PhaseName[] = [
-  'IDLE', 'FLOAT_TAXI', 'TRANS_A', 'TRANS_B', 'TRANS_C', 'CRUISE',
-  'TURN', 'DECEL_A', 'DECEL_B', 'DECEL_C',
+  'IDLE', 'FLOAT_TAXI', 'TRANSITION', 'CRUISE', 'DECEL',
 ];
 
 // ArduPilot Plane custom mode ID (跟 wig_dispatcher.lua / wig_auto.lua 一致)
@@ -66,23 +63,22 @@ function runPreflightChecks(params: Record<string, number>): CheckResult[] {
     results.push({ sev: passing ? 'ok' : sev, label, cur: cur !== undefined ? cur.toString() : '?', expected, note });
   };
 
-  // ─── 安全 gate (必须正确, err) ───
+  // ─── 安全 gate (必须正确, err) — P7.9.4 ───
   check('SIM 必须关',           'WIGA_SIM_EN',     x => x===0, '=0', 'err', '虚拟传感器不能实飞');
   check('GTEST 必须关',         'WIGA_GTEST_EN',   x => x===0, '=0', 'err', '锁 phase 不能实飞');
-  check('V_PI 安全 gate',       'WIGK_V_TEST_OK',  x => x===0, '=0', 'err', '=1 时绕过 V 检查, 实飞危险');
   check('SCR_ENABLE',           'SCR_ENABLE',      x => x===1, '=1', 'err', 'lua 没启用');
   check('Q_FRAME_CLASS',        'Q_FRAME_CLASS',   x => x===17, '=17', 'err', 'Dynamic Matrix');
 
-  // ─── 速度参数 (不能 0 / 范围) ───
-  check('巡航 V_TGT',           'WIGA_V_TGT',      x => x>=5 && x<=15, '5-15 m/s', 'err', '<5 起不来, >15 离水太快');
-  check('TRANS_B → CRUISE V',  'WIGK_TX_V_TGT',   x => x>=3 && x<=10, '3-10 m/s', 'err', '=0 立即满足, TRANS_B 形同跳过');
+  // ─── 速度参数 ───
+  check('巡航 V_TGT',           'WIGA_V_TGT',      x => x>=3 && x<=15, '3-15 m/s', 'err', '<3 起不来');
+  check('TRANSITION V_OK',      'WIGA_TX_V_OK',    x => x>=3 && x<=10, '3-10 m/s', 'err', '跃迁完成 V 阈值');
   check('V_PI I 项',            'MSK_V_PI_I',      x => x<=0.1,    '≤0.1 (default 0.02)', 'err', '太大 windup');
   check('V_INT_LIM',            'MSK_V_INT_LIM',   x => x>=2 && x<=10, '2-10', 'warn');
-  check('KT_LIM (saturate)',    'MSK_KT_LIM',      x => x>=0.7 && x<=0.95, '0.7-0.95', 'warn', 'default 0.85');
 
-  // ─── envelope / safety ───
-  check('Pitch envelope',       'WIGA_P_ENV_W',    x => x>=15 && x<=35, '15-35°', 'warn', 'abort 阈值');
-  check('Emerg pitch (预测)',  'WIGA_P_RECV_W',   x => x>=10 && x<=20, '10-20°', 'warn');
+  // ─── Layer 1/2 abort 阈值 (P7.9.4 替代旧 envelope/emergency) ───
+  check('Layer 1 body 阈值',    'WIGA_L1_BODY',    x => x>=10 && x<=20, '10-20°', 'warn', '软减油触发');
+  check('Layer 1 rate 阈值',    'WIGA_L1_RATE',    x => x>=15 && x<=40, '15-40°/s', 'warn');
+  check('Layer 2 body 阈值',    'WIGA_L2_BODY',    x => x>=15 && x<=30, '15-30°', 'warn', '硬截 disarm');
   check('Stick ANGLE_MAX',      'Q_A_ANGLE_MAX',   x => x>=5 && x<=20, '5-20', 'warn', 'stick → angle 上限');
 
   // ─── tilt servo BW (lua clamp [0.1, 5]) ───
@@ -325,28 +321,32 @@ export function Auto() {
   // — Per-card save-style 状态 —
   // 每卡片 keys 是固定的, savedSnap 跟踪最近 saved 值
   const ALL_TUNABLE_KEYS = React.useMemo(() => [
-    // Section 5 Mode + Strategy
-    'WIGA_CRUISE_MODE','WIGA_TRANS_STRAT','WIGA_FAC_SCL','WIGA_V_CH10_EN','WIGA_PREFLT_REQ','WIGA_V_TGT',
-    // Section 7 Manual (P7.6: K 表改 WIGK_TAXI/TRANS/CRUISE)
-    'MSK_BPCH_G1','MSK_BPCH_G2','MSK_BPCH_G3',
-    'WIGK_TAXI_KS','WIGK_TAXI_KDF','WIGK_TAXI_KT','WIGK_TAXI_KRD',
-    'WIGK_TRANS_KS','WIGK_TRANS_KDF','WIGK_TRANS_KT','WIGK_TRANS_KRD',
-    'WIGK_CRUISE_KS','WIGK_CRUISE_KDF','WIGK_CRUISE_KT','WIGK_CRUISE_KRD',
-    'MSK_V_MIN','MSK_V_MAX','MSK_V_DRIVE_MIN','MSK_V_DEADZONE',
-    'MSK_THR_CHECK','MSK_THR_TEST',
-    // Section 8 Phase (按 sub-tab 分组, 但同一 saved snap 跟踪)
-    'WIGA_TAXI_DUR','WIGA_TAXI_CAP','WIGA_TAXI_THR_T','WIGA_TAXI_THR_R',
-    'WIGA_TX_TO_MS','WIGA_TX_BTRIM','WIGA_TX_STRIM','WIGA_TX_S_MS','WIGK_TX_B_MS','WIGK_TX_A_TOL','WIGK_TX_V_TGT',
-    'WIGA_FV_KS_GOAL','WIGA_FV_KS_LMIN','WIGA_FV_KS_LMAX','WIGA_FV_TRIM',
-    'WIGA_RV_KS_GOAL','WIGA_RV_KS_LMIN','WIGA_RV_KS_LMAX','WIGA_RV_TRIM',
-    'WIGA_DF_GOAL','WIGA_DF_LMIN','WIGA_DF_LMAX',
-    'WIGA_V_OK_W',
-    'WIGA_DEC_A_MS','WIGA_DEC_B_MS','WIGA_DEC_C_MS','WIGA_DEC_V_A','WIGA_DEC_V_B',
-    'WIGK_HDG_HOLD_EN','WIGA_HDG_KP','WIGA_HDG_KD','WIGA_TRN_HDG','WIGA_MTX_DUR','WIGA_TRN_DUR',
-    'WIGA_PITCH_OK_W','WIGA_ROLL_OK_W','WIGA_KTC_OK_W','WIGA_P_ENV_W','WIGA_P_RECV_W','WIGA_R_RECV_W',
-    'WIGA_RATE_TH','WIGA_RATE_MMS','WIGA_PRE_SPEED',
-    // P7.6 新参数 + P7.8v V_PI 安全 override
-    'WIGK_L2_STAB_P','WIGK_L2_STAB_R','WIGK_V_ACC_MAX','WIGK_V_TEST_OK',
+    // P7.9.4: 全部 WIGA_/MSK_ 真实 lua 注册参数 (撤旧 WIGK_/FV_/RV_/DF_/DEC_*/TX_*/CRUISE_MODE/STRAT/FAC)
+    // V 控制
+    'WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_PREFLT_REQ',
+    'MSK_BPCH_G1','MSK_BPCH_G2',
+    'MSK_V_MIN','MSK_V_MAX',
+    // FLOAT_TAXI
+    'WIGA_TAXI_DUR','WIGA_TAXI_THR_T',
+    // TRANSITION (P7.9.4 新: K+ch3 lerp + V≥TX_V_OK → CRUISE)
+    'WIGA_TX_DUR','WIGA_TX_V_OK','WIGA_TX_TO_MS',
+    // CRUISE + 限时巡航
+    'WIGA_CMAX_MS',
+    // DECEL
+    'WIGA_DECEL_MS','WIGA_DECEL_V_OFF',
+    // Layer 1 (软减油)
+    'WIGA_L1_BODY','WIGA_L1_RATE','WIGA_L1_MMS','WIGA_L1_CH3','WIGA_L1_R_PWM',
+    'WIGA_L1_HOLD','WIGA_L1_REC_W','WIGA_L1_REC_MS',
+    // Layer 2 (硬截 disarm)
+    'WIGA_L2_BODY','WIGA_RATE_MMS',
+    // Yaw P+I+D
+    'WIGA_HDG_HOLD_EN','WIGA_HDG_KP','WIGA_HDG_KI','WIGA_HDG_KD','WIGA_HDG_I_LIM',
+    // GTEST 地面测试
+    'WIGA_GTEST_EN','WIGA_GTEST_PH','WIGA_GTEST_CAP',
+    // Preflight
+    'WIGA_PRE_SPEED',
+    // SITL
+    'WIGA_SIM_EN','WIGA_SIM_V','WIGA_SIM_PITCH','WIGA_SIM_ROLL',
   ], []);
 
   const [savedSnap, setSavedSnap] = useState<Record<string, number>>(() => {
@@ -445,7 +445,7 @@ export function Auto() {
 
   // Phase index for progress bar
   const phaseIdx = MAIN_FLOW.indexOf(phase);
-  const isAbnormal = phase === 'ABORT_L1' || phase === 'EMERGENCY';
+  const isAbnormal = phase === 'EMERGENCY';   // P7.9.4 撤 ABORT_L1, dispatcher L1/L2 接管
 
   // KTC / Layer 没有 dedicated MAVLink msg — 暂时从 STATUSTEXT 抽 (P7 后 add MSK8 stream)
   // 这里 placeholder, 实测后 add log_msg listener
@@ -533,24 +533,9 @@ export function Auto() {
           </div>
         )}
 
-        {/* Latched run state (arm 时锁) */}
+        {/* Latched run state (arm 时锁) — P7.9.4 只剩 V_TGT */}
         <div className="mt-3 text-[11px] border-t border-line pt-2">
           <div className="text-fg-mute mb-1">Run state (armed 边沿 latch):</div>
-          <div className="val-mono">
-            cruise_mode = <span className="text-accent">{runState?.cruise ?? '— (待 STATUSTEXT)'}</span>
-            <span className="text-fg-dim ml-1">
-              (WIGA_CRUISE_MODE = {params.WIGA_CRUISE_MODE?.toFixed(0)})
-            </span>
-          </div>
-          <div className="val-mono">
-            strategy    = <span className="text-accent">{runState?.strat ?? '—'}</span>
-            <span className="text-fg-dim ml-1">
-              (WIGA_TRANS_STRAT = {params.WIGA_TRANS_STRAT?.toFixed(0)})
-            </span>
-          </div>
-          <div className="val-mono">
-            profile     = <span className="text-accent">{runState?.profile ?? '— (ch7 latch)'}</span>
-          </div>
           <div className="val-mono">
             V_TGT runtime = <span className="text-accent">{runState?.v_tgt?.toFixed(1) ?? '—'}</span> m/s
           </div>
@@ -574,24 +559,24 @@ export function Auto() {
             label="V actual / target"
             value={`${tlm.airspeed.toFixed(1)} / ${(runState?.v_tgt ?? params.WIGA_V_TGT).toFixed(1)}`}
             unit="m/s"
-            color={Math.abs(tlm.airspeed - (runState?.v_tgt ?? params.WIGA_V_TGT)) < (params.WIGA_V_OK_W ?? 0.7)
+            color={Math.abs(tlm.airspeed - (runState?.v_tgt ?? params.WIGA_V_TGT)) < 1.0
               ? 'ok' : 'warn'}
           />
           <SensorBox
             label="Body pitch"
             value={tlm.pitch_deg.toFixed(1)}
             unit="°"
-            color={Math.abs(tlm.pitch_deg) > (params.WIGA_P_RECV_W ?? 30)
+            color={Math.abs(tlm.pitch_deg) > (params.WIGA_L2_BODY ?? 20)
               ? 'err'
-              : Math.abs(tlm.pitch_deg) > (params.WIGA_P_ENV_W ?? 15) ? 'warn' : 'fg'}
+              : Math.abs(tlm.pitch_deg) > (params.WIGA_L1_BODY ?? 15) ? 'warn' : 'fg'}
           />
           <SensorBox
             label="Body roll"
             value={tlm.roll_deg.toFixed(1)}
             unit="°"
-            color={Math.abs(tlm.roll_deg) > (params.WIGA_R_RECV_W ?? 40)
+            color={Math.abs(tlm.roll_deg) > (params.WIGA_L2_BODY ?? 20)
               ? 'err'
-              : Math.abs(tlm.roll_deg) > (params.WIGA_ROLL_OK_W ?? 5) ? 'warn' : 'fg'}
+              : Math.abs(tlm.roll_deg) > (params.WIGA_L1_BODY ?? 15) ? 'warn' : 'fg'}
           />
           <SensorBox
             label="Heading (yaw)"
@@ -635,9 +620,9 @@ export function Auto() {
                     <RotateCcw size={11} className="inline mr-1" /> 强制关闭 SIM_EN
                   </button>
                   <div className="mt-2 text-[10px] text-fg-dim grid grid-cols-3 gap-1 val-mono">
-                    <div>V = {(params.WIGA_SIM_V ?? 0).toFixed(1)}  +ramp {(params.WIGA_SIM_V_RAMP ?? 0).toFixed(2)}/s</div>
-                    <div>Pitch = {(params.WIGA_SIM_PITCH ?? 0).toFixed(1)}°  +ramp {(params.WIGA_SIM_P_RAMP ?? 0).toFixed(0)}°/s</div>
-                    <div>Roll = {(params.WIGA_SIM_ROLL ?? 0).toFixed(1)}°  +ramp {(params.WIGA_SIM_R_RAMP ?? 0).toFixed(0)}°/s</div>
+                    <div>V = {(params.WIGA_SIM_V ?? 0).toFixed(1)}</div>
+                    <div>Pitch = {(params.WIGA_SIM_PITCH ?? 0).toFixed(1)}°</div>
+                    <div>Roll = {(params.WIGA_SIM_ROLL ?? 0).toFixed(1)}°</div>
                   </div>
                 </div>
               )}
@@ -648,48 +633,21 @@ export function Auto() {
 
       {/* GTEST 已搬到 "地面测试" 独立 tab — 不在 模式配置 里 */}
 
-      {/* ═════════ Section 5: Mode + Strategy 选择 (save 式) ═════════ */}
+      {/* ═════════ Section 5: V + Preflight (P7.9.4 撤 mode/strategy/fac_scl) ═════════ */}
       <div className="card">
         <div className="flex items-center mb-3">
-          <span className="card-title mb-0 flex-1">Mode + Strategy 选择 (armed 边沿 latch, 改完点保存)</span>
+          <span className="card-title mb-0 flex-1">V 控制 + Preflight (P7.9.4 撤 cruise_mode/strategy/fac_scl)</span>
           <PreflightCheckButton />
-          {CardSync({ keys: ['WIGA_CRUISE_MODE','WIGA_TRANS_STRAT','WIGA_FAC_SCL','WIGA_V_CH10_EN','WIGA_PREFLT_REQ','WIGA_V_TGT'], label: "Mode+Strategy" })}
+          {CardSync({ keys: ['WIGA_V_CH10_EN','WIGA_PREFLT_REQ','WIGA_V_TGT','WIGA_CMAX_MS'], label: "V 控制" })}
         </div>
         <div className="space-y-2">
-          <RadioRow
-            label="Cruise Mode"
-            value={params.WIGA_CRUISE_MODE ?? 0}
-            onChange={v => setLocal('WIGA_CRUISE_MODE', v)}
-            options={[
-              { label: 'FRONT_VENT (前出气)', value: 0 },
-              { label: 'REAR_VENT (后出气)',  value: 1 },
-            ]}
-          />
-          <RadioRow
-            label="Strategy"
-            value={params.WIGA_TRANS_STRAT ?? 0}
-            onChange={v => setLocal('WIGA_TRANS_STRAT', v)}
-            options={[
-              { label: 'STEADY (慢推)', value: 0 },
-              { label: 'BURST  (速推)', value: 1 },
-            ]}
-          />
-          <RadioRow
-            label="Factor Scale"
-            value={params.WIGA_FAC_SCL ?? 0}
-            onChange={v => setLocal('WIGA_FAC_SCL', v)}
-            options={[
-              { label: 'OFF (默认)', value: 0 },
-              { label: 'ON (按 mode 改 KS/KDF)', value: 1 },
-            ]}
-          />
           <RadioRow
             label="ch10 V_TGT"
             value={params.WIGA_V_CH10_EN ?? 0}
             onChange={v => setLocal('WIGA_V_CH10_EN', v)}
             options={[
-              { label: 'static (GCS)',  value: 0 },
-              { label: 'dynamic (ch10)', value: 1 },
+              { label: 'static (GCS WIGA_V_TGT)',  value: 0 },
+              { label: 'dynamic (ch10 PWM 映射)', value: 1 },
             ]}
           />
           <RadioRow
@@ -704,10 +662,17 @@ export function Auto() {
           <SliderRow
             paramKey="WIGA_V_TGT"
             label="V_TGT static"
-            value={params.WIGA_V_TGT ?? 7.0}
+            value={params.WIGA_V_TGT ?? 6.0}
             onChange={v => setLocal('WIGA_V_TGT', v)}
             disabled={(params.WIGA_V_CH10_EN ?? 0) >= 0.5}
             unit="m/s"
+          />
+          <SliderRow
+            paramKey="WIGA_CMAX_MS"
+            label="限时巡航"
+            value={params.WIGA_CMAX_MS ?? 0}
+            onChange={v => setLocal('WIGA_CMAX_MS', v)}
+            unit="ms (0=无限)"
           />
         </div>
 
@@ -771,236 +736,147 @@ export function Auto() {
         </div>
 
         {phTab === 'TAXI' && (() => {
-          const keys = ['WIGA_TAXI_DUR','WIGA_TAXI_CAP','WIGA_TAXI_THR_T','WIGA_TAXI_THR_R',
-                        'WIGK_TAXI_KS','WIGK_TAXI_KDF','WIGK_TAXI_KT','WIGK_TAXI_KRD'];
+          const keys = ['WIGA_TAXI_DUR','WIGA_TAXI_THR_T','WIGA_TAXI_THR_R'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">浮筒滑水: 7 路 servo 锁固定, 油门自动从 0 渐增到目标值. 涵道 K (KS/KDF/KT/KRD) 在下方 K 涵道权重 section 调.</span>
+                <span className="text-[10px] text-fg-dim">浮筒滑水: K=TAXI 表 (lua 内置), ch3 自动 ramp 到目标值, base_pitch=4°</span>
                 {CardSync({ keys, label: "TAXI" })}
               </div>
-              {ParamRow({ k: "WIGA_TAXI_DUR",     unit: "ms",  hint: "浮筒滑水的总时长, 跑完后进入起飞跃迁" })}
-              {ParamRow({ k: "WIGA_TAXI_THR_T", unit: "",    hint: "油门最终目标 (0=停, 0.5=半推, 1.0=满推, 实飞建议 0.5-0.8)" })}
-              {ParamRow({ k: "WIGA_TAXI_THR_R",   unit: "1/s", hint: "油门从 0 渐增到目标的速度 (0.3 = 满推约 3 秒到位)" })}
-              {ParamRow({ k: "WIGA_TAXI_CAP",     unit: "",    hint: "滑水期间油门倍数 (实飞 1.0 不限; 地检 0.3 半推台架用)" })}
-              <div className="mt-2 pt-2 border-t border-line/30">
-                <div className="text-[11px] text-fg-mute mb-1">K 涵道权重 (各组目标推力比例 [0,1])</div>
-                {ParamRow({ k: "WIGK_TAXI_KS",  unit: "", hint: "S 组斜吹 (主升力, 4 涵道) — 浮筒滑水期 KS 比例" })}
-                {ParamRow({ k: "WIGK_TAXI_KDF", unit: "", hint: "DF 前下吹 (姿态主, 2 涵道) — 浮筒期低占比" })}
-                {ParamRow({ k: "WIGK_TAXI_KT",  unit: "", hint: "T 后推 (4 涵道, 主推力) — 浮筒期慢推" })}
-                {ParamRow({ k: "WIGK_TAXI_KRD", unit: "", hint: "RD 后斜下吹 (2 涵道, 推力+尾压) — 浮筒期低占比" })}
+              {ParamRow({ k: "WIGA_TAXI_DUR",   unit: "ms",  hint: "浮筒滑水总时长, 跑完进 TRANSITION" })}
+              {ParamRow({ k: "WIGA_TAXI_THR_T", unit: "",    hint: "末值油门 [0,1] (0.5=半推, 1.0=满推)" })}
+              {ParamRow({ k: "WIGA_TAXI_THR_R", unit: "1/s", hint: "ch3 ramp 速率 (0.3=满推约 3s 到位)" })}
+              <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
+                K 表 P7.9.4 内置 wig_control: TAXI = {`{KS=0.3 KDF=0.3 KT=0.3 KRD=0.3}`}. base_pitch=MSK_BPCH_G1=4°.
               </div>
             </div>
           );
         })()}
 
         {phTab === 'TRANS' && (() => {
-          const keys = ['WIGA_TX_TO_MS','WIGA_TX_BTRIM','WIGA_TX_STRIM',
-                        'WIGA_TX_S_MS','WIGK_TX_B_MS','WIGK_TX_A_TOL',
-                        'WIGK_TX_V_TGT',
-                        'WIGK_TRANS_KS','WIGK_TRANS_KDF','WIGK_TRANS_KT','WIGK_TRANS_KRD'];
+          const keys = ['WIGA_TX_DUR','WIGA_TX_V_OK','WIGA_TX_TO_MS'];
           return (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-fg-dim">跃迁 (P7.8l 简化): TRANS_A 等 view ±tol 维持 → TRANS_B 满油门, V≥V_TGT → CRUISE</span>
-                {CardSync({ keys, label: "TRANS" })}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-fg-dim">TRANSITION (P7.9.4 单一 phase): K + ch3 同步 lerp TAXI→CRUISE, base_pitch=10°, V≥V_OK → CRUISE</span>
+                {CardSync({ keys, label: "TRANSITION" })}
               </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">超时</div>
-                {ParamRow({ k: "WIGA_TX_TO_MS", unit: "ms", hint: "TRANS_A/B 每阶段最长时长, 超时 → ABORT_L1" })}
+              {ParamRow({ k: "WIGA_TX_DUR",   unit: "ms",  hint: "K + ch3 同步 lerp 时长 (默认 4000ms)" })}
+              {ParamRow({ k: "WIGA_TX_V_OK",  unit: "m/s", hint: "跃迁成功阈值 V (达到即进 CRUISE)" })}
+              {ParamRow({ k: "WIGA_TX_TO_MS", unit: "ms",  hint: "跃迁超时 (没达到 V_OK 自动 DECEL)" })}
+              <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
+                K 表 P7.9.4 内置: TRANS = {`{KS=0.8 KDF=0.5 KT=0.3 KRD=0.3}`} (跃迁慢推). 入口立即 base_pitch=10°.
+                <br/>进 CRUISE 时 K_KT 一次性 0.3 → 0.5 (V_PI 中位).
               </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">TRANS_A 角度目标 (过推角)</div>
-                {ParamRow({ k: "WIGA_TX_BTRIM", unit: "°", hint: "BURST 策略 (火箭模式) 机头过推角度" })}
-                {ParamRow({ k: "WIGA_TX_STRIM", unit: "°", hint: "STEADY 策略 (稳推模式) 机头过推角度" })}
-                {ParamRow({ k: "WIGK_TX_A_TOL", unit: "°", hint: "角度容忍 (body 偏 target ±° 才算到位)" })}
-                {ParamRow({ k: "WIGA_TX_S_MS", unit: "ms", hint: "STEADY 模式 维持时长 (默认 1000ms)" })}
-                {ParamRow({ k: "WIGK_TX_B_MS", unit: "ms", hint: "BURST 模式 维持时长 (默认 300ms)" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">TRANS_B → CRUISE 入口速度 (跟 CRUISE 维持 V_TGT 解耦)</div>
-                {ParamRow({ k: "WIGK_TX_V_TGT", unit: "m/s", hint: "TRANS_B → CRUISE 入口速度阈值 (默认 5 = 离水速度). 跟巡航维持的 WIGA_V_TGT 分开调" })}
-              </div>
-              <div className="pt-2 border-t border-line/30">
-                <div className="text-[11px] text-fg-mute mb-1">K 涵道权重 (跃迁期共用 A/B/C)</div>
-                {ParamRow({ k: "WIGK_TRANS_KS",  unit: "", hint: "S 组斜吹 — 跃迁期 KS 比例 (抬头 + 升力)" })}
-                {ParamRow({ k: "WIGK_TRANS_KDF", unit: "", hint: "DF 前下吹 — 跃迁期辅助抬头" })}
-                {ParamRow({ k: "WIGK_TRANS_KT",  unit: "", hint: "T 后推 — 跃迁期主推力建立 (KT_ramp 渐增到这值)" })}
-                {ParamRow({ k: "WIGK_TRANS_KRD", unit: "", hint: "RD 后斜下吹 — 跃迁期推力 + 抵消 KS 抬头" })}
-              </div>
-              </div>
+            </div>
           );
         })()}
 
         {phTab === 'CRUISE' && (() => {
-          const keys = ['WIGA_FV_KS_GOAL','WIGA_FV_KS_LMIN','WIGA_FV_KS_LMAX','WIGA_FV_TRIM',
-                        'WIGA_RV_KS_GOAL','WIGA_RV_KS_LMIN','WIGA_RV_KS_LMAX','WIGA_RV_TRIM',
-                        'WIGA_DF_GOAL','WIGA_DF_LMIN','WIGA_DF_LMAX',
-                        'WIGA_V_TGT','WIGA_V_OK_W',
-                        'WIGA_MTX_DUR','WIGA_TRN_DUR',
-                        'WIGK_CRUISE_KS','WIGK_CRUISE_KDF','WIGK_CRUISE_KT','WIGK_CRUISE_KRD'];
+          const keys = ['WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_CMAX_MS'];
           return (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-fg-dim">巡航 mode-aware tilt 配方 + V_PI 维持 V_TGT</span>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-fg-dim">稳态 cruise: V_PI 调 K_KT = 0.5 + V_COR (V_COR ±0.5 → K_KT ∈ [0, 1])</span>
                 {CardSync({ keys, label: "CRUISE" })}
               </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">FV (前出气, LOG65 风格)</div>
-                {ParamRow({ k: "WIGA_FV_KS_GOAL", unit: "°", hint: "前出气模式 — S 组桁架的目标角度" })}
-                {ParamRow({ k: "WIGA_FV_KS_LMIN", unit: "°", hint: "前出气模式 — S 组允许的最低角度 (软限位)" })}
-                {ParamRow({ k: "WIGA_FV_KS_LMAX", unit: "°", hint: "前出气模式 — S 组允许的最高角度" })}
-                {ParamRow({ k: "WIGA_FV_TRIM", unit: "°", hint: "前出气模式 — 巡航机头俯仰角度" })}
+              {ParamRow({ k: "WIGA_V_TGT",        unit: "m/s", hint: "V_PI 目标速度" })}
+              {ParamRow({ k: "WIGA_V_CH10_EN",    unit: "0/1", hint: "=1 用 ch10 PWM 映射到 V_TGT (MSK_V_MIN/V_MAX 配)" })}
+              {ParamRow({ k: "WIGA_CMAX_MS",unit: "ms",  hint: "限时巡航 (0=无限, >0=N ms 自动 DECEL). 配合 ch7 latch 启用" })}
+              <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
+                K=CRUISE 表 (KS=0.8 KDF=0.5 KT=0.5 KRD=0.5, manual G3 共用), V_PI 仅调 KT (= 0.5+V_COR ∈ [0,1]). ch3 锁 2000. base_pitch=10°.
+                <br/>限时启用: armed 时 ch7&lt;1300 latch _test_mode, V_PI 起算 N ms → DECEL.
               </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">RV (后出气, LOG17 风格)</div>
-                {ParamRow({ k: "WIGA_RV_KS_GOAL", unit: "°", hint: "后出气模式 — S 组桁架的目标角度" })}
-                {ParamRow({ k: "WIGA_RV_KS_LMIN", unit: "°", hint: "后出气模式 — S 组允许的最低角度" })}
-                {ParamRow({ k: "WIGA_RV_KS_LMAX", unit: "°", hint: "后出气模式 — S 组允许的最高角度" })}
-                {ParamRow({ k: "WIGA_RV_TRIM", unit: "°", hint: "后出气模式 — 巡航机头俯仰角度" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">DF 通用 (FV+RV 共用)</div>
-                {ParamRow({ k: "WIGA_DF_GOAL", unit: "°", hint: "DF (前下吹) 涵道的目标角度" })}
-                {ParamRow({ k: "WIGA_DF_LMIN", unit: "°", hint: "DF 涵道允许的最低角度" })}
-                {ParamRow({ k: "WIGA_DF_LMAX", unit: "°", hint: "DF 涵道允许的最高角度" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">V 目标</div>
-                {ParamRow({ k: "WIGA_V_TGT", unit: "m/s", hint: "巡航目标速度 (米/秒). ch10 模式开启时由油门旋钮覆盖" })}
-                {ParamRow({ k: "WIGA_V_OK_W", unit: "m/s", hint: "允许的速度误差范围 (±)" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">CRUISE 退档时长 (profile 决定)</div>
-                {ParamRow({ k: "WIGA_MTX_DUR", unit: "ms", hint: "MATRIX profile: CRUISE 跑这么久后自动 → DECEL_A (默认 30000ms = 30s)" })}
-                {ParamRow({ k: "WIGA_TRN_DUR", unit: "ms", hint: "TURN profile: CRUISE 跑这么久后 → TURN phase 开始转弯 (默认 15000ms)" })}
-              </div>
-              <div className="pt-2 border-t border-line/30">
-                <div className="text-[11px] text-fg-mute mb-1">K 涵道权重 (CRUISE / TURN 共用, FV+RV 都用这套)</div>
-                {ParamRow({ k: "WIGK_CRUISE_KS",  unit: "", hint: "S 组斜吹 — 巡航期 KS 比例 (wing 主升, 较低值)" })}
-                {ParamRow({ k: "WIGK_CRUISE_KDF", unit: "", hint: "DF 前下吹 — 巡航期低占比 (主姿态 ATC)" })}
-                {ParamRow({ k: "WIGK_CRUISE_KT",  unit: "", hint: "T 后推 — 巡航期主前推 (高占比, 配合 V_PI)" })}
-                {ParamRow({ k: "WIGK_CRUISE_KRD", unit: "", hint: "RD 后斜下吹 — 巡航期推力源 (KS 副推)" })}
-              </div>
-              </div>
+            </div>
           );
         })()}
 
         {phTab === 'DECEL' && (() => {
-          const keys = ['WIGA_DEC_A_MS','WIGA_DEC_B_MS','WIGA_DEC_C_MS','WIGA_DEC_V_A','WIGA_DEC_V_B'];
+          const keys = ['WIGA_DECEL_MS','WIGA_DECEL_V_OFF'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">减速: A ch3 ramp + base_pitch 回收 → B lua 接管 tilt 降 lift → C motor cut</span>
+                <span className="text-[10px] text-fg-dim">缓降单一 phase (P7.9.4): K_KT 0.5→0, ch3 2000→1100 over DECEL_MS</span>
                 {CardSync({ keys, label: "DECEL" })}
               </div>
-              {ParamRow({ k: "WIGA_DEC_A_MS", unit: "ms", hint: "减速 A 段 (主推力减) 的时长" })}
-              {ParamRow({ k: "WIGA_DEC_B_MS", unit: "ms", hint: "减速 B 段 (姿态归位) 的时长" })}
-              {ParamRow({ k: "WIGA_DEC_C_MS", unit: "ms", hint: "减速 C 段 (电机停车) 的时长" })}
-              {ParamRow({ k: "WIGA_DEC_V_A", unit: "m/s", hint: "速度低于此值时, 从减速 A 段进入 B 段" })}
-              {ParamRow({ k: "WIGA_DEC_V_B", unit: "m/s", hint: "速度低于此值时, 从减速 B 段进入 C 段" })}
-                          <div className="mt-2 text-[10px] text-fg-dim leading-snug pt-2 border-t border-line/30">
-                <b>K 涵道权重</b>: DECEL_A 复用 <b>TRANS K 表</b>, DECEL_B 复用 <b>TAXI K 表</b> — 在 TRANS / TAXI 子页配置
+              {ParamRow({ k: "WIGA_DECEL_MS",     unit: "ms",  hint: "DECEL 总时长 (lerp K_KT + ch3)" })}
+              {ParamRow({ k: "WIGA_DECEL_V_OFF",  unit: "m/s", hint: "V 低于此值 + 时间过半 → arming:disarm() 进 IDLE" })}
+              <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
+                DECEL 入口: pilot 切 mode / GTEST 软退 / 限时巡航到期. base_pitch 回 4° (TAXI) 准备触水.
               </div>
-              </div>
+            </div>
           );
         })()}
 
         {phTab === 'YAW' && (() => {
-          const keys = ['WIGK_HDG_HOLD_EN','WIGA_HDG_KP','WIGA_HDG_KD','WIGA_TRN_HDG','WIGA_MTX_DUR','WIGA_TRN_DUR'];
+          const keys = ['WIGA_HDG_HOLD_EN','WIGA_HDG_KP','WIGA_HDG_KI','WIGA_HDG_KD','WIGA_HDG_I_LIM'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">Yaw hold P+D 锁航向, TURN profile 时偏 TRN_HDG</span>
-                {CardSync({ keys, label: "Yaw+TURN" })}
+                <span className="text-[10px] text-fg-dim">Yaw P+I+D 慢校正 (denom 越大越温和)</span>
+                {CardSync({ keys, label: "Yaw" })}
               </div>
-              {ParamRow({ k: "WIGK_HDG_HOLD_EN", unit: "0/1", hint: "P7.8ω: 1=lua 自动 yaw hold (override ch4), 0=禁用 hold pilot 手控 (水里失稳兜底)" })}
-              {ParamRow({ k: "WIGA_HDG_KP", unit: "", hint: "航向锁定的比例增益 (越大转向越激进)" })}
-              {ParamRow({ k: "WIGA_HDG_KD", unit: "", hint: "航向锁定的微分增益 (越大阻尼越强, 防超调)" })}
-              {ParamRow({ k: "WIGA_TRN_HDG", unit: "°", hint: "转向模式下, 相对起始航向偏多少度 (180=调头)" })}
-              {ParamRow({ k: "WIGA_MTX_DUR", unit: "ms", hint: "MATRIX 档下巡航多久后自动减速" })}
-              {ParamRow({ k: "WIGA_TRN_DUR", unit: "ms", hint: "TURN 档下巡航多久后开始转向" })}
-                          <div className="mt-2 text-[10px] text-fg-dim leading-snug pt-2 border-t border-line/30">
-                <b>K 涵道权重</b>: TURN 复用 <b>CRUISE K 表</b> — 在 CRUISE 子页配置
+              {ParamRow({ k: "WIGA_HDG_HOLD_EN", unit: "0/1", hint: "1=lua 自动 yaw hold (override ch4), 0=pilot 手控 ch4" })}
+              {ParamRow({ k: "WIGA_HDG_KP",      unit: "denom", hint: "P denom (err=180° 才给满杆, default 180)" })}
+              {ParamRow({ k: "WIGA_HDG_KI",      unit: "denom", hint: "I denom (长期累积慢, default 3600)" })}
+              {ParamRow({ k: "WIGA_HDG_KD",      unit: "denom", hint: "D denom (err_rate=30°/s 满 D 阻尼)" })}
+              {ParamRow({ k: "WIGA_HDG_I_LIM",   unit: "", hint: "I 项 norm 上限 (anti-windup, default 0.3)" })}
+              <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
+                公式: norm = err/KP + ∫err/KI + err_rate/KD, clamp ±1, ch4 = 1500 - norm × 400.
+                <br/>FLOAT_TAXI / TRANSITION / CRUISE / DECEL 全程跑.
               </div>
-              </div>
+            </div>
           );
         })()}
 
         {phTab === 'GLOBAL' && (() => {
-          const keys = ['WIGA_PITCH_OK_W','WIGA_ROLL_OK_W','WIGA_KTC_OK_W','WIGA_P_ENV_W','WIGA_P_RECV_W','WIGA_R_RECV_W',
-                        'WIGA_RATE_TH','WIGA_RATE_MMS','WIGA_PRE_SPEED',
-                        'WIGK_L2_STAB_P','WIGK_L2_STAB_R','WIGK_V_ACC_MAX','WIGK_V_TEST_OK'];
+          const keys = ['WIGA_L1_BODY','WIGA_L1_RATE','WIGA_L1_MMS','WIGA_L1_CH3','WIGA_L1_R_PWM',
+                        'WIGA_L1_HOLD','WIGA_L1_REC_W','WIGA_L1_REC_MS',
+                        'WIGA_L2_BODY','WIGA_RATE_MMS','WIGA_PRE_SPEED'];
           return (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] text-fg-dim">公用阈值: 稳态 / L1 envelope / L3 set_mode(29) / Emergency / Preflight</span>
-                {CardSync({ keys, label: "Global" })}
+                <span className="text-[10px] text-fg-dim">L1 软减油 (|body|&gt;15°+rate, ch3 减 50%) / L2 硬截 (|body|&gt;20°, disarm)</span>
+                {CardSync({ keys, label: "L1/L2" })}
               </div>
               <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">稳态容差</div>
-                {ParamRow({ k: "WIGA_PITCH_OK_W", unit: "°", hint: "判定俯仰稳态的容差" })}
-                {ParamRow({ k: "WIGA_ROLL_OK_W", unit: "°", hint: "判定横滚稳态的容差" })}
-                {ParamRow({ k: "WIGA_KTC_OK_W", unit: "%", hint: "判定 T 组推力稳态的容差" })}
+                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">Layer 1 (软减油, 保 ATC)</div>
+                {ParamRow({ k: "WIGA_L1_BODY",   unit: "°",    hint: "L1 角度阈值 (default 15°)" })}
+                {ParamRow({ k: "WIGA_L1_RATE",   unit: "°/s",  hint: "L1 rate 阈值 (default 20°/s, 同向才算发散)" })}
+                {ParamRow({ k: "WIGA_L1_MMS",    unit: "ms",   hint: "L1 持续时长 (deglitch 100ms)" })}
+                {ParamRow({ k: "WIGA_L1_CH3",    unit: "PWM",  hint: "ch3 平滑下降到 (default 1500=50%)" })}
+                {ParamRow({ k: "WIGA_L1_R_PWM",  unit: "PWM/s",hint: "ch3 下降速率 (500=1s 内完成)" })}
+                {ParamRow({ k: "WIGA_L1_HOLD",   unit: "ms",   hint: "救稳上限 (没恢复 → 升 L2)" })}
+                {ParamRow({ k: "WIGA_L1_REC_W",  unit: "°",    hint: "恢复 |body| 阈值 (default 10°)" })}
+                {ParamRow({ k: "WIGA_L1_REC_MS", unit: "ms",   hint: "恢复持续 (姿态稳 N ms 解 latch)" })}
               </div>
               <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">L1 envelope (ABORT_L1 触发)</div>
-                {ParamRow({ k: "WIGA_P_ENV_W", unit: "°", hint: "巡航俯仰超过此误差, 触发 L1 内部退档" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">L3 set_mode(29) 安全网</div>
-                {ParamRow({ k: "WIGA_P_RECV_W", unit: "°", hint: "俯仰超过此角度, 切换到 WIG_RECOVER 救援模式" })}
-                {ParamRow({ k: "WIGA_R_RECV_W", unit: "°", hint: "横滚超过此角度, 切换到 WIG_RECOVER 救援模式" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">Emergency (角度+rate+单调)</div>
-                {ParamRow({ k: "WIGA_RATE_TH", unit: "°/s", hint: "角速度阈值 (配合角度+持续判定紧急姿态失控)" })}
-                {ParamRow({ k: "WIGA_RATE_MMS", unit: "ms", hint: "失控姿态持续多久后, 触发紧急反向打杆" })}
+                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">Layer 2 (硬截 disarm)</div>
+                {ParamRow({ k: "WIGA_L2_BODY",   unit: "°",  hint: "L2 角度阈值 (单帧, default 20°)" })}
+                {ParamRow({ k: "WIGA_RATE_MMS",  unit: "ms", hint: "L2 disarm 前缓冲 (default 300ms)" })}
               </div>
               <div>
                 <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">Preflight</div>
-                {ParamRow({ k: "WIGA_PRE_SPEED", unit: "°/s", hint: "7 路舵机自检扫描的速度 (越大越快)" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">Layer 2 自适应 (SGRP tilt 速率跟姿态稳定性成正比)</div>
-                {ParamRow({ k: "WIGK_L2_STAB_P", unit: "°", hint: "判定姿态不稳的 pitch err 临界 (越大越宽容)" })}
-                {ParamRow({ k: "WIGK_L2_STAB_R", unit: "°/s", hint: "判定姿态不稳的 pitch 角速度临界" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">V_TGT 加速度限制 (防 V_PI 看到突变)</div>
-                {ParamRow({ k: "WIGK_V_ACC_MAX", unit: "m/s²", hint: "V_TGT 内部最大爬升率 (0.5 = V 从 5 爬到 12 约 14 秒)" })}
-              </div>
-              <div>
-                <div className="text-[11px] text-fg-mute mb-1 border-b border-line/30">V_PI 安全 gate (无空速 + 无 GPS 时)</div>
-                {ParamRow({ k: "WIGK_V_TEST_OK", unit: "0/1", hint: "默认 0 安全 (无空速+GPS 时 V_PI 不跑, 防 motor 失控). 桌面测试设 1 用 0 跑 V_PI" })}
+                {ParamRow({ k: "WIGA_PRE_SPEED", unit: "°/s", hint: "7 路 servo sweep 速度" })}
               </div>
             </div>
           );
         })()}
       </div>
 
-      {/* ═════════ Section 7: Manual 配置 (P7.5a 移到 AUTO 时序下面) ═════════ */}
+      {/* ═════════ Section 7: Manual 配置 (P7.9.4 极简) ═════════ */}
       <div className="card">
         <div className="flex items-center mb-3">
-          <span className="card-title mb-0 flex-1">Manual 配置 (Mode 17 QSTAB / ch7: LOW=TAXI MID=TRANS HIGH=CRUISE)</span>
-          {CardSync({ keys: [
-              'MSK_BPCH_G1','MSK_BPCH_G2','MSK_BPCH_G3',
-              'WIGK_TAXI_KS','WIGK_TAXI_KDF','WIGK_TAXI_KT','WIGK_TAXI_KRD',
-              'WIGK_TRANS_KS','WIGK_TRANS_KDF','WIGK_TRANS_KT','WIGK_TRANS_KRD',
-              'WIGK_CRUISE_KS','WIGK_CRUISE_KDF','WIGK_CRUISE_KT','WIGK_CRUISE_KRD',
-              'MSK_V_MIN','MSK_V_MAX','MSK_V_DRIVE_MIN','MSK_V_DEADZONE',
-              'MSK_THR_CHECK','MSK_THR_TEST',
-            ], label: "Manual" })}
+          <span className="card-title mb-0 flex-1">Manual + V_PI 共用 (Mode 17 QSTAB / ch7 拨 G1/G2/G3)</span>
+          {CardSync({ keys: ['MSK_BPCH_G1','MSK_BPCH_G2','MSK_V_MIN','MSK_V_MAX'], label: "Manual" })}
         </div>
         <div className="space-y-3">
-          {/* 3 phase base_pitch (param key 仍是 MSK_BPCH_G1/2/3 兼容历史 EEPROM) */}
           <div>
-            <div className="text-[11px] text-fg-mute mb-1">3 phase base_pitch (ch7 切档目标 Q_TRIM_PITCH)</div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="text-[11px] text-fg-mute mb-1">base_pitch (ch7 切档 Q_TRIM_PITCH)</div>
+            <div className="grid grid-cols-2 gap-2">
               {[
-                { label: 'TAXI',   key: 'MSK_BPCH_G1' },
-                { label: 'TRANS',  key: 'MSK_BPCH_G2' },
-                { label: 'CRUISE', key: 'MSK_BPCH_G3' },
+                { label: 'TAXI (G1)',         key: 'MSK_BPCH_G1' },
+                { label: 'TRANS = CRUISE (G2)', key: 'MSK_BPCH_G2' },
               ].map(({ label, key }) => {
                 const r = paramRange(key);
                 return (
@@ -1012,56 +888,18 @@ export function Auto() {
                 );
               })}
             </div>
-          </div>
-
-          {/* 12 K 表 (P7.6: G1/G2/G3 → TAXI/TRANS/CRUISE phase 命名, 读 WIGK_*) */}
-          <div>
-            <div className="text-[11px] text-fg-mute mb-1">K 涵道权重 — motor[i] = ch3 × (K_base × ramp + boost × BST) × thr_cap</div>
-            <table className="w-full text-[11px]">
-              <thead><tr className="border-b border-line">
-                <th className="text-left py-1 pr-2 text-fg-dim">组</th>
-                {['TAXI','TRANS','CRUISE'].map(p => <th key={p} className="text-center text-accent">{p}</th>)}
-              </tr></thead>
-              <tbody>
-                {['KS','KDF','KT','KRD'].map(grp => (
-                  <tr key={grp} className="border-b border-line/30">
-                    <td className="py-1 pr-2 text-fg-mute">{grp}</td>
-                    {['TAXI','TRANS','CRUISE'].map(p => {
-                      const k = `WIGK_${p}_${grp}`;
-                      const r = paramRange(k);
-                      return (
-                        <td key={p} className="px-1 py-0.5">
-                          <NumInput value={params[k] ?? 0} min={r.min} max={r.max} step={r.step}
-                            onCommit={v => setLocal(k, v)} className="input val-mono text-center w-full" />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
             <div className="mt-1 text-[10px] text-fg-dim">
-              AUTO 状态机也用这套 K 表 (TAXI/TRANS/CRUISE 跟 phase 对应). Manual 模式 ch7 切档跟 AUTO phase 一致.
+              P7.9.4: G3 (CRUISE) 撤了, CRUISE 读 G2. K 表全内置在 wig_control (不再 WIGK_*).
             </div>
           </div>
 
-          {/* CRUISE ch10 V 控制 (Manual + AUTO 共用) */}
           <div className="border-t border-line pt-2">
-            <div className="text-[11px] text-fg-mute mb-1">CRUISE ch10 旋钮速度控制 (Manual + AUTO 共用)</div>
-            {ParamRow({ k: "MSK_V_MIN",       unit: "m/s", hint: "ch10 速度下限 (拨杆最低位)" })}
-            {ParamRow({ k: "MSK_V_MAX",       unit: "m/s", hint: "ch10 速度上限 (拨杆最高位)" })}
-            {ParamRow({ k: "MSK_V_DRIVE_MIN", unit: "m/s", hint: "CRUISE 入档兜底 (破驼峰最低速)" })}
-            {ParamRow({ k: "MSK_V_DEADZONE",  unit: "PWM", hint: "ch10 中位死区 ±" })}
+            <div className="text-[11px] text-fg-mute mb-1">CRUISE ch10 旋钮速度控制 (V_PI 用)</div>
+            {ParamRow({ k: "MSK_V_MIN", unit: "m/s", hint: "ch10 PWM 1000 对应的 V_TGT 下限" })}
+            {ParamRow({ k: "MSK_V_MAX", unit: "m/s", hint: "ch10 PWM 2000 对应的 V_TGT 上限" })}
             <div className="text-[10px] text-fg-dim mt-1">
-              加速度限制改用 WIGK_V_ACC_MAX (Global 阈值 sub-tab), 旧 MSK_V_ACC_MAX 撤
+              WIGA_V_CH10_EN=1 时 V_PI 读 ch10 映射. =0 用 WIGA_V_TGT 静态.
             </div>
-          </div>
-
-          {/* thr_cap 调试 */}
-          <div className="border-t border-line pt-2">
-            <div className="text-[11px] text-fg-mute mb-1">ch6 thr_cap 调试限幅 (Manual mode)</div>
-            {ParamRow({ k: "MSK_THR_CHECK", unit: "", hint: "ch6=CHECK 地面检查限幅" })}
-            {ParamRow({ k: "MSK_THR_TEST", unit: "", hint: "ch6=TEST 台架测试限幅" })}
           </div>
         </div>
       </div>

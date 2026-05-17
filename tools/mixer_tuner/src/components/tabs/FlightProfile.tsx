@@ -1,6 +1,7 @@
-// v9 P7.4 控制律 tab — 公用参数 (Q_* ATC PID, V_PI, drift, GROUP_BOOST, 三层级)
+// v9 P7.9.4 控制律 tab — 公用参数 (Q_* ATC PID, V_PI, base_pitch ramp, V_TGT 映射)
 // **不实时推送 FC** — 必须显式 "保存" 才下发.
-// 旧 3 档 / K 表 / V 控制 / vmix 已搬到 模式配置 → Manual section.
+// P7.9.4 撤掉的参数 (lua 不再读): MSK_KT_LIM, MSK_L2_SGRP_RT, MSK_L2_RD_RT, MSK_K_DRFT_RT,
+//   MSK_BST_KS/KDF/KT/KRD, MSK_BST_SAT_HI/LO, MSK_V_TGT, MSK_P_EMRG_DEG, MSK_G3_RAMP_MS, MSK_DRFT_TIME.
 import React, { useEffect, useMemo, useState } from 'react';
 import { useStore } from '../../store/useStore';
 import { gcs } from '../../lib/gcs';
@@ -8,44 +9,19 @@ import { NumInput } from '../common/NumInput';
 import { paramRange, quantize, ATC_NATIVE_KEYS } from '../../lib/defaults';
 import { Download, Upload } from 'lucide-react';
 
-const K_GROUPS = ['KS', 'KDF', 'KT', 'KRD'] as const;
-type KGroup = typeof K_GROUPS[number];
-const K_LABELS: Record<KGroup, string> = {
-  KS:  'KS — S 斜吹 (主升力+前推, 4 EDF)',
-  KDF: 'KDF — DF 前下吹 (升力辅+pitch快响应, 2 EDF)',
-  KT:  'KT — T 后推 (前推主, 4 EDF)',
-  KRD: 'KRD — RD 后斜 (pitch 主源, 2 EDF)',
-};
-
-const TILT_IDS = ['DFL', 'DFR', 'TL1', 'TR1', 'RDL', 'RDR', 'SGRP'] as const;
-type TiltId = typeof TILT_IDS[number];
-const TILT_LABELS: Record<TiltId, string> = {
-  DFL: 'DFL — 左前下吹 (0..75°)',
-  DFR: 'DFR — 右前下吹 (0..75°)',
-  TL1: 'TL1 — 左 T1 roll 主 (90..135°)',
-  TR1: 'TR1 — 右 T1 roll 主 (90..135°)',
-  RDL: 'RDL — 左后斜 (0..135°)',
-  RDR: 'RDR — 右后斜 (0..135°)',
-  SGRP:'SGRP — S 组中央 (0..75°)',
-};
-
-// v9 P7.4 控制律 tab 管理的 FC 参数 key (Pull/Save 范围)
-// 旧 3 档 + K 表 + V 控制 + vmix 已迁 模式配置 → Manual section
+// v9 P7.9.4 控制律 tab 管理的 FC 参数 key (Pull/Save 范围)
+// K 表 / vmix / 模式分档已迁 模式配置 tab.
 const FLIGHT_KEYS: string[] = [
   // ATC 原生 PID + stick limit (P7.4 加, 控制律 = 公用参数)
   ...ATC_NATIVE_KEYS,
-  // V_PI 速度环 PID (Manual fallback + WIG_AUTO 共用)
-  'MSK_V_TGT','MSK_V_PI_P','MSK_V_PI_I','MSK_V_PI_D',
-  'MSK_V_INT_LIM','MSK_G3_RAMP_MS',
-  // 三层级加速 + Emergency
-  'MSK_KT_LIM','MSK_L2_SGRP_RT','MSK_L2_RD_RT','MSK_P_EMRG_DEG',
-  // GROUP_BOOST (V_PI demand 在 4 组分配权重) + Layer hysteresis
-  'MSK_BST_KS','MSK_BST_KDF','MSK_BST_KT','MSK_BST_KRD',
-  'MSK_BST_SAT_HI','MSK_BST_SAT_LO',
-  // drift 学习 (MSK + MSK2 副表)
-  'MSK_K_DRFT_RT','MSK_DRFT_TIME',
-  'MSK2_DRFT_DZ','MSK2_DRFT_KS_R','MSK2_DRFT_KDF_R','MSK2_DRFT_KT_R','MSK2_DRFT_KRD_R',
-  'MSK2_KRAMP_MS','MSK2_P5_KS_RT','MSK2_PO_NORM',
+  // V_PI 速度环 PID (CRUISE 用, V_TGT 用 WIGA_V_TGT / ch10 映射)
+  'MSK_V_PI_P','MSK_V_PI_I','MSK_V_PI_D','MSK_V_INT_LIM',
+  // base_pitch ramp + 离散 base_pitch 值 (TAXI/CRUISE)
+  'MSK_TRIM_RATE','MSK_BPCH_G1','MSK_BPCH_G2',
+  // ch10 → V_TGT 映射范围
+  'MSK_V_MIN','MSK_V_MAX',
+  // orchestrator ATC fb 归一化
+  'MSK2_PO_NORM',
 ];
 
 export function FlightProfile() {
@@ -152,7 +128,7 @@ export function FlightProfile() {
           onClick={onPull}
           disabled={busy !== 'idle'}
           className="btn flex items-center gap-1.5 disabled:opacity-50"
-          title="从飞控读取 50 个飞行参数, 覆盖本地 (放弃未保存修改)"
+          title={`从飞控读取 ${FLIGHT_KEYS.length} 个飞行参数, 覆盖本地 (放弃未保存修改)`}
         >
           <Download size={12} />
           拉取 ({FLIGHT_KEYS.length})
@@ -171,7 +147,7 @@ export function FlightProfile() {
       {/* 拉取/保存中禁用所有输入, 防中途改值污染 dirty 集合 / 推送一致性 */}
       <fieldset disabled={busy !== 'idle'} className={'space-y-3 ' + (busy !== 'idle' ? 'opacity-60 pointer-events-none' : '')}>
 
-      {/* P7.4 新: ATC 原生 PID + stick limit (公用) */}
+      {/* P7.4 ATC 原生 PID + stick limit (公用) */}
       <div className="card">
         <div className="card-title">ATC 原生 PID (Q_A_*, 公用控制律)</div>
         <div className="grid grid-cols-3 gap-3">
@@ -257,215 +233,101 @@ export function FlightProfile() {
           </div>
         </div>
         <div className="mt-2 text-[10px] text-fg-mute leading-snug">
-          <b>ATC 调参建议</b>: 实飞 RAT_RLL/PIT_P=0.135, ANG_P=4.5, ANGLE_MAX=500 (±5°); 台架 RAT_P=0.4, ANG_P=8, ANGLE_MAX=3000 (±30°).
+          <b>ATC 调参建议</b>: 实飞 RAT_RLL/PIT_P=0.135, ANG_P=4.5, ANGLE_MAX=5 (±5°); 台架 RAT_P=0.4, ANG_P=8, ANGLE_MAX=30 (±30°).
           PTCH_LIM_MAX/MIN_DEG + ROLL_LIMIT_DEG 控 stick travel 上限 (跟 ANGLE_MAX 取小值生效).
           Q_TRIM_PITCH 由 lua 写, 这里不暴露 (在 GCS tab 显示).
         </div>
       </div>
 
-      {/* v9 P3.5/P3.6 三层级加速参数 */}
+      {/* P7.9.4 CRUISE V_PI 速度环 */}
       <div className="card">
-        <div className="card-title">CRUISE 三层级加速 (KT → SGRP 倾转改平 → 加力)</div>
+        <div className="card-title">CRUISE V_PI 速度环 (P7.9.4)</div>
         <div className="grid grid-cols-4 gap-3">
           <div>
-            <div className="label mb-1">KT 撞限阈值 (KT_LIM)</div>
-            <NumInput value={params.MSK_KT_LIM ?? 1.0} min={0.5} max={1.0} step={0.01}
-                      onCommit={v => setLocal('MSK_KT_LIM', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">Layer 1→2 转换 (迟滞 0.95×)</div>
-          </div>
-          <div>
-            <div className="label mb-1">SGRP rate base (°/s)</div>
-            <NumInput value={params.MSK_L2_SGRP_RT ?? 5.0} min={0.5} max={30} step={0.5}
-                      onCommit={v => setLocal('MSK_L2_SGRP_RT', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 SGRP 朝水平 tilt 基础速率 (P7.6: × stability 自适应, 见 模式配置→Global)</div>
-          </div>
-          <div>
-            <div className="label mb-1">RD rate (°/s)</div>
-            <NumInput value={params.MSK_L2_RD_RT ?? 3.0} min={0.5} max={30} step={0.5}
-                      onCommit={v => setLocal('MSK_L2_RD_RT', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">Layer 2 RDL/RDR 改平</div>
-          </div>
-          <div>
-            <div className="label mb-1">K_drift rate (/s, P3.7)</div>
-            <NumInput value={params.MSK_K_DRFT_RT ?? 0.0} min={0} max={0.1} step={0.001}
-                      onCommit={v => setLocal('MSK_K_DRFT_RT', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">0=关, 0.005-0.02=学习</div>
-          </div>
-        </div>
-        <div className="grid grid-cols-5 gap-3 mt-3">
-          <div>
-            <div className="label mb-1">BST_SAT_HI</div>
-            <NumInput value={params.MSK_BST_SAT_HI ?? 0.95} min={0.5} max={1.0} step={0.01}
-                      onCommit={v => setLocal('MSK_BST_SAT_HI', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">Layer 1→2 进入</div>
-          </div>
-          <div>
-            <div className="label mb-1">BST_SAT_LO</div>
-            <NumInput value={params.MSK_BST_SAT_LO ?? 0.85} min={0.5} max={1.0} step={0.01}
-                      onCommit={v => setLocal('MSK_BST_SAT_LO', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">退出 hysteresis</div>
-          </div>
-          <div>
-            <div className="label mb-1">V_INT_LIM</div>
-            <NumInput value={params.MSK_V_INT_LIM ?? 10} min={1} max={50} step={0.5}
-                      onCommit={v => setLocal('MSK_V_INT_LIM', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">PID I 项 cap</div>
-          </div>
-          <div>
-            <div className="label mb-1">CRUISE PI ramp</div>
-            <NumInput value={params.MSK_G3_RAMP_MS ?? 1500} min={0} max={5000} step={100}
-                      onCommit={v => setLocal('MSK_G3_RAMP_MS', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">TRANS→CRUISE PI ramp ms (param: MSK_G3_RAMP_MS)</div>
-          </div>
-          <div>
-            <div className="label mb-1">DRFT_TIME (s)</div>
-            <NumInput value={params.MSK_DRFT_TIME ?? 5} min={0.5} max={30} step={0.5}
-                      onCommit={v => setLocal('MSK_DRFT_TIME', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">drift 学习触发持续 s</div>
-          </div>
-        </div>
-        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
-          <b>Layer 1</b>: boost &lt; SAT_HI, mixer 加法 (KS/KT/KRD 按 BST 比例). <b>Layer 2</b>: boost ≥ SAT_HI, _l2_offset 朝 90° 改平 SGRP/RDL/RDR.
-          <b>Layer 3</b>: 倾转撞机械限位 = 飞机能力极限, 仅 STATUSTEXT 警告.
-          <b>Emergency 阈值</b>: pitch 偏 target ≥ P_EMRG_DEG 时让 Layer 2 退回 Layer 1 (姿态优先).
-          <b>K_drift</b>: pitch_in 出死区持续 DRFT_TIME 秒 → 慢加 K_drift (lua 内部, 不写 EEPROM).
-        </div>
-      </div>
-
-      {/* v9 P4 副表 MSK2_ — drift 学率因子 + dead zone + K ramp */}
-      <div className="card">
-        <div className="card-title">drift 学习参数 (MSK2_ 副表)</div>
-        <div className="grid grid-cols-6 gap-3">
-          <div>
-            <div className="label mb-1">DRFT_DZ</div>
-            <NumInput value={params.MSK2_DRFT_DZ ?? 0.2} min={0} max={1} step={0.01}
-                      onCommit={v => setLocal('MSK2_DRFT_DZ', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">pitch_in 死区</div>
-          </div>
-          <div>
-            <div className="label mb-1">DRFT_KS_R</div>
-            <NumInput value={params.MSK2_DRFT_KS_R ?? 1.0} min={0} max={2} step={0.05}
-                      onCommit={v => setLocal('MSK2_DRFT_KS_R', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">KS 学率因子</div>
-          </div>
-          <div>
-            <div className="label mb-1">DRFT_KDF_R</div>
-            <NumInput value={params.MSK2_DRFT_KDF_R ?? 0.5} min={0} max={2} step={0.05}
-                      onCommit={v => setLocal('MSK2_DRFT_KDF_R', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">KDF 学率因子</div>
-          </div>
-          <div>
-            <div className="label mb-1">DRFT_KT_R</div>
-            <NumInput value={params.MSK2_DRFT_KT_R ?? 0.3} min={0} max={2} step={0.05}
-                      onCommit={v => setLocal('MSK2_DRFT_KT_R', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">KT 学率因子</div>
-          </div>
-          <div>
-            <div className="label mb-1">DRFT_KRD_R</div>
-            <NumInput value={params.MSK2_DRFT_KRD_R ?? 0.0} min={0} max={2} step={0.05}
-                      onCommit={v => setLocal('MSK2_DRFT_KRD_R', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">KRD 反向学率 (默认 0)</div>
-          </div>
-          <div>
-            <div className="label mb-1">KRAMP_MS</div>
-            <NumInput value={params.MSK2_KRAMP_MS ?? 1000} min={0} max={5000} step={50}
-                      onCommit={v => setLocal('MSK2_KRAMP_MS', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">vmix=0 K ramp ms</div>
-          </div>
-        </div>
-        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
-          <b>因子物理</b>: KS 主升力 → 1.0 (全速学); KDF 主姿态 → 0.5 (半速); KT 跟 CRUISE boost 撞 → 0.3 (抑); KRD 后部斜下吹 sign 反向 → 0.0 默认关 (打开 = 飞行员看 LOG 确定 KRD 不跟 boost 撞后改 0.5).
-          <b>KRAMP_MS</b> 仅 vmix=0 (P3.10 离散三档) 切档用; vmix=1 (P4 默认) 走 set_alpha 连续插值, 不触发.
-        </div>
-      </div>
-
-      {/* v9 P4 实战 GROUP_BOOST + V_TGT 范围 */}
-      <div className="card">
-        <div className="card-title">CRUISE 加速分配 (GROUP_BOOST) + 油门杆=V_TGT 范围</div>
-        <div className="grid grid-cols-6 gap-3">
-          <div>
-            <div className="label mb-1">BST_KS</div>
-            <NumInput value={params.MSK_BST_KS ?? 0.5} min={0} max={1} step={0.01}
-                      onCommit={v => setLocal('MSK_BST_KS', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">S 副推力比例</div>
-          </div>
-          <div>
-            <div className="label mb-1">BST_KDF</div>
-            <NumInput value={params.MSK_BST_KDF ?? 0.0} min={0} max={1} step={0.01}
-                      onCommit={v => setLocal('MSK_BST_KDF', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">DF (建议 0, 主姿态)</div>
-          </div>
-          <div>
-            <div className="label mb-1">BST_KT</div>
-            <NumInput value={params.MSK_BST_KT ?? 1.0} min={0} max={1} step={0.01}
-                      onCommit={v => setLocal('MSK_BST_KT', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">T 主推 (建议 1.0)</div>
-          </div>
-          <div>
-            <div className="label mb-1">BST_KRD</div>
-            <NumInput value={params.MSK_BST_KRD ?? 0.5} min={0} max={1} step={0.01}
-                      onCommit={v => setLocal('MSK_BST_KRD', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">RD 副推+尾控</div>
-          </div>
-        </div>
-        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
-          <b>GROUP_BOOST</b>: CRUISE V_PI 速度 demand 在 4 组分配权重. K = (K_base + drift) × ramp + boost × BST_K, 然后 clamp [0,1] × cap.
-        </div>
-      </div>
-
-      {/* v9 P7.6 CRUISE V_PI 速度环 */}
-      <div className="card">
-        <div className="card-title">CRUISE 速度环 V_PI (P7.6 加 V_TGT smoother + L2 stability)</div>
-        <div className="grid grid-cols-4 gap-3">
-          <div>
-            <div className="label mb-1">老 V_TGT (兼容)</div>
-            <NumInput value={params.MSK_V_TGT ?? 9.0} min={1} max={30} step={0.1}
-                      onCommit={v => setLocal('MSK_V_TGT', v)}
-                      className="input val-mono w-full" />
-            <div className="text-[9px] text-fg-mute mt-0.5">P4 用 ch3=V_TGT 替代</div>
-          </div>
-          <div>
-            <div className="label mb-1">P 增益</div>
-            <NumInput value={params.MSK_V_PI_P ?? 0.05} min={0} max={1} step={0.01}
+            <div className="label mb-1">P 增益 (V_PI_P)</div>
+            <NumInput value={params.MSK_V_PI_P ?? 0.05} min={0} max={1} step={0.005}
                       onCommit={v => setLocal('MSK_V_PI_P', v)}
                       className="input val-mono w-full" />
           </div>
           <div>
-            <div className="label mb-1">I 增益</div>
-            <NumInput value={params.MSK_V_PI_I ?? 0.02} min={0} max={1} step={0.01}
+            <div className="label mb-1">I 增益 (V_PI_I)</div>
+            <NumInput value={params.MSK_V_PI_I ?? 0.02} min={0} max={1} step={0.005}
                       onCommit={v => setLocal('MSK_V_PI_I', v)}
                       className="input val-mono w-full" />
           </div>
           <div>
-            <div className="label mb-1">D 增益 (阻尼)</div>
-            <NumInput value={params.MSK_V_PI_D ?? 0.0} min={0} max={1} step={0.01}
+            <div className="label mb-1">D 增益 (V_PI_D, 阻尼)</div>
+            <NumInput value={params.MSK_V_PI_D ?? 0.0} min={0} max={1} step={0.005}
                       onCommit={v => setLocal('MSK_V_PI_D', v)}
                       className="input val-mono w-full" />
           </div>
+          <div>
+            <div className="label mb-1">I 项 cap (V_INT_LIM)</div>
+            <NumInput value={params.MSK_V_INT_LIM ?? 5.0} min={0} max={50} step={0.5}
+                      onCommit={v => setLocal('MSK_V_INT_LIM', v)}
+                      className="input val-mono w-full" />
+          </div>
         </div>
-        <div className="mt-2 text-[9px] text-fg-mute leading-snug">
-          CRUISE phase + ahrs:airspeed_estimate() 有效 → 自动 PI. correction = P×err + I×∫err − D×(dV/dt).
-          V_TGT 经 WIGK_V_ACC_MAX 速率限制 (P7.6) 避免 D 项跳变. 默认 D=0, 实飞振荡时调到 0.05-0.1.
-          correction clamp ±0.3 (±30% thr_cap), TAXI/TRANS 时 PID 状态清零防污染.
+        <div className="mt-2 text-[10px] text-fg-mute leading-snug">
+          CRUISE phase + ahrs:airspeed_estimate() 有效 → 自动 V_PI. correction = P×err + I×∫err − D×(dV/dt).
+          V_TGT 来源: ch10 PWM 映射 (WIGA_V_CH10_EN=1, 范围 MSK_V_MIN..MSK_V_MAX) 或 WIGA_V_TGT 静态. 老 MSK_V_TGT 已撤.
+          correction 直接给 mixer.set_speed_correction → KT 单组 boost (P7.9.4 撤了 GROUP_BOOST 4 组分配). TAXI/TRANS 时 PID 清零.
+        </div>
+      </div>
+
+      {/* P7.9.4 base_pitch + ch10 V_TGT 映射 */}
+      <div className="card">
+        <div className="card-title">base_pitch + ch10 → V_TGT 映射</div>
+        <div className="grid grid-cols-4 gap-3">
+          <div>
+            <div className="label mb-1">TRIM_RATE (°/s)</div>
+            <NumInput value={params.MSK_TRIM_RATE ?? 99} min={0} max={200} step={1}
+                      onCommit={v => setLocal('MSK_TRIM_RATE', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">base_pitch ramp 速率 (默认 99 ≈ 阶跃)</div>
+          </div>
+          <div>
+            <div className="label mb-1">BPCH_G1 (TAXI, °)</div>
+            <NumInput value={params.MSK_BPCH_G1 ?? 4} min={-10} max={20} step={0.5}
+                      onCommit={v => setLocal('MSK_BPCH_G1', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">TAXI 浮筒自然 base_pitch</div>
+          </div>
+          <div>
+            <div className="label mb-1">BPCH_G2 (TRANS/CRUISE, °)</div>
+            <NumInput value={params.MSK_BPCH_G2 ?? 10} min={-10} max={20} step={0.5}
+                      onCommit={v => setLocal('MSK_BPCH_G2', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">抬头建气垫 + 巡航 base_pitch</div>
+          </div>
+          <div>
+            <div className="label mb-1">PO_NORM (orchestrator)</div>
+            <NumInput value={params.MSK2_PO_NORM ?? 0.5} min={0.1} max={2.0} step={0.05}
+                      onCommit={v => setLocal('MSK2_PO_NORM', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">orchestrator ATC fb 归一化系数</div>
+          </div>
+        </div>
+        <div className="grid grid-cols-4 gap-3 mt-3">
+          <div>
+            <div className="label mb-1">V_MIN (ch10 下限, m/s)</div>
+            <NumInput value={params.MSK_V_MIN ?? 3.0} min={0} max={25} step={0.5}
+                      onCommit={v => setLocal('MSK_V_MIN', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">ch10=1000 → V_TGT</div>
+          </div>
+          <div>
+            <div className="label mb-1">V_MAX (ch10 上限, m/s)</div>
+            <NumInput value={params.MSK_V_MAX ?? 10.0} min={0} max={25} step={0.5}
+                      onCommit={v => setLocal('MSK_V_MAX', v)}
+                      className="input val-mono w-full" />
+            <div className="text-[9px] text-fg-mute mt-0.5">ch10=2000 → V_TGT</div>
+          </div>
+        </div>
+        <div className="mt-2 text-[10px] text-fg-mute leading-snug">
+          <b>base_pitch</b>: ch7 phase 切档 (TAXI=G1 / TRANS=G2 / CRUISE=G2) → Q_TRIM_PITCH 按 TRIM_RATE °/s 逼近.
+          默认 99°/s ≈ 阶跃, 实飞振荡时调到 10-30°/s 给 ATC 缓冲.
+          <b>V_TGT</b>: 当 WIGA_V_CH10_EN=1 (在 模式配置 tab), ch10 PWM linear 映射到 [V_MIN, V_MAX]; 关时用 WIGA_V_TGT 固定值.
         </div>
       </div>
 

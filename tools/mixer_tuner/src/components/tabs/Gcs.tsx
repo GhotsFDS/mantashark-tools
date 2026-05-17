@@ -147,20 +147,18 @@ export function Gcs() {
     if (liveQTrim !== undefined) return liveQTrim;  // 真值: lua 推的 ramp 后实时 trim
     const bp1 = params.MSK_BPCH_G1 ?? 5;
     const bp2 = params.MSK_BPCH_G2 ?? 11;
-    const bp3 = params.MSK_BPCH_G3 ?? 8;
-    if (modeNum === 17) {  // MANUAL: ch7 直选 phase
+    if (modeNum === 17) {  // MANUAL: ch7 直选 phase. P7.9.4: CRUISE 跟 TRANS 同 base_pitch (G2)
       const tier = ch7Pwm < 1300 ? 1 : ch7Pwm <= 1700 ? 2 : 3;
-      return tier === 1 ? bp1 : tier === 2 ? bp2 : bp3;
+      return tier === 1 ? bp1 : bp2;
     }
     if (modeNum === 27) {  // AUTO: phase 由状态机定, 跟 wig_auto STATUSTEXT 取 — Tuner 这边用 livePhase
       if (livePhase.startsWith('FLOAT') || livePhase === 'IDLE') return bp1;
-      if (livePhase.startsWith('TRANS') || livePhase.startsWith('DECEL')) return bp2;
-      if (livePhase === 'CRUISE' || livePhase === 'TURN') return bp3;
+      // P7.9.4: TRANS/DECEL/CRUISE/TURN 都用 G2
       return bp2;
     }
     if (modeNum === 29) return bp1;  // RECV 固定锁 TAXI
     return bp1;
-  }, [liveQTrim, modeNum, ch7Pwm, livePhase, params.MSK_BPCH_G1, params.MSK_BPCH_G2, params.MSK_BPCH_G3]);
+  }, [liveQTrim, modeNum, ch7Pwm, livePhase, params.MSK_BPCH_G1, params.MSK_BPCH_G2]);
 
   const pitchStick = useMemo(() => {
     // stick_input = (pwm-1500)/500, [-1, +1]
@@ -184,10 +182,11 @@ export function Gcs() {
   const pitchActual = (pitchView !== undefined) ? (pitchView + pitchBase) : undefined;
   // ΔP = actual_body - target_body = view - stick (相同结果两种表达, view frame 等价)
   const pitchErr = (pitchView !== undefined) ? (pitchView - pitchStick) : undefined;
-  const pEmrg = params.MSK_P_EMRG_DEG ?? 1.5;
+  // P7.9.4: MSK_P_EMRG_DEG 撤了 (三层级警告随 G3 一起删). 阈值固定 1.5° err / 0.75° warn.
+  const P_ERR_THRESHOLD = 1.5;
   const pitchErrColor: 'ok'|'warn'|'err'|undefined = (pitchErr === undefined) ? undefined
-    : Math.abs(pitchErr) >= pEmrg ? 'err'
-    : Math.abs(pitchErr) >= pEmrg / 2 ? 'warn'
+    : Math.abs(pitchErr) >= P_ERR_THRESHOLD ? 'err'
+    : Math.abs(pitchErr) >= P_ERR_THRESHOLD / 2 ? 'warn'
     : 'ok';
   // Tgt 始终显示 "base+stick" 拆解格式 (即使 stick=0 也显示 "+0.0°")
   const pitchTgtDisplay = pitchBase.toFixed(1) + '°' +

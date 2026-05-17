@@ -1,8 +1,8 @@
-// v9 P7.5: 地面测试独立 tab (旧 Auto.tsx Section 6 拆出来)
+// v9 P7.9.4: 地面测试独立 tab (旧 Auto.tsx Section 6 拆出来)
 //
 // WIG_AUTO mode 27 + WIGA_GTEST_EN=1 → armed 边沿 lua 锁定一个 phase, 不自动推进.
-// Emergency (角度+rate+monotonic) / L3 set_mode(29) / C++ heartbeat 全保留.
-// 软退档 (timeout/振荡/Layer/DUR 计时) 全关.
+// Layer 1 / Layer 2 abort (dispatcher 顶层) + C++ heartbeat 全保留.
+// 锁住后软退档 (timeout/振荡/DUR 计时) 全关; GTEST_EN setp 1→0 软退到 DECEL.
 
 import React from 'react';
 import { useStore } from '../../store/useStore';
@@ -11,14 +11,12 @@ import { paramRange } from '../../lib/defaults';
 import { NumInput } from '../common/NumInput';
 import { AlertTriangle, RotateCcw, Save } from 'lucide-react';
 
-// 6 phase 中英标签 (跟 wig_auto.lua GTEST_PH_MAP 一致)
+// 4 phase 中英标签 (P7.9.4 wig_auto.lua: 1=FLOAT_TAXI 2=TRANSITION 3=CRUISE 4=DECEL)
 const PHASE_OPTIONS: { value: number; label: string }[] = [
   { value: 1, label: '1·浮筒滑水 (FLOAT_TAXI)' },
-  { value: 2, label: '2·跃迁抬头 (TRANS_A)' },
-  { value: 3, label: '3·跃迁推力 (TRANS_B)' },
-  { value: 4, label: '4·跃迁速度环 (TRANS_C)' },
-  { value: 5, label: '5·巡航 (CRUISE)' },
-  { value: 6, label: '6·转向 (TURN)' },
+  { value: 2, label: '2·跃迁 (TRANSITION)' },
+  { value: 3, label: '3·巡航 (CRUISE)' },
+  { value: 4, label: '4·减速 (DECEL)' },
 ];
 
 const GTEST_KEYS = ['WIGA_GTEST_EN', 'WIGA_GTEST_PH', 'WIGA_GTEST_CAP'];
@@ -92,7 +90,7 @@ export function GroundTest() {
 
       {/* 主配置 */}
       <div className="card">
-        <div className="card-title">Ground Test 强制相位锁 (P7.3: armed 边沿 latch)</div>
+        <div className="card-title">Ground Test 强制相位锁 (P7.9.4: armed 边沿 latch, 4 phase)</div>
         <div className="space-y-3">
           {/* GTEST_EN */}
           <div className="grid grid-cols-[160px_1fr] gap-2 items-center">
@@ -109,7 +107,7 @@ export function GroundTest() {
             </div>
           </div>
 
-          {/* GTEST_PH 6 phase 单列 */}
+          {/* GTEST_PH 4 phase 单列 */}
           <div className="grid grid-cols-[160px_1fr] gap-2 items-start">
             <span className="text-[11px] text-fg-mute pt-1">Lock to phase</span>
             <div className="grid grid-cols-2 gap-2">
@@ -140,8 +138,8 @@ export function GroundTest() {
 
         <div className="mt-4 text-[10px] text-fg-mute leading-snug space-y-1 border-t border-line pt-3">
           <div>• armed 边沿 latch: 改 EN/PH/CAP 后必须 <b>点保存 + disarm + arm</b> 才生效</div>
-          <div>• 同时 latch <code>WIGA_CRUISE_MODE</code> (FV/RV) + <code>WIGA_TRANS_STRAT</code> (STEADY/BURST) — 影响 TRANS_A 检测 + CRUISE tilt 配方</div>
-          <div>• 锁定后: 软退档 (timeout / 振荡 / Layer / DUR 计时) 全关; Emergency / L3 set_mode(29) / heartbeat watchdog 仍激活</div>
+          <div>• P7.9.4 4 phase: 1=FLOAT_TAXI / 2=TRANSITION / 3=CRUISE / 4=DECEL (撤了 6 phase + 2 cruise mode + strat)</div>
+          <div>• 锁定后: 软退档 (timeout / 振荡 / DUR 计时) 全关; Layer 1/2 (dispatcher) / heartbeat watchdog 仍激活</div>
           <div>• 1Hz STATUSTEXT: <code>WIG_AUTO GTEST LOCK=&lt;phase&gt; cap=&lt;v&gt;</code></div>
         </div>
 
@@ -149,9 +147,9 @@ export function GroundTest() {
           onClick={onForceClose}
           disabled={(params.WIGA_GTEST_EN ?? 0) < 0.5 || !gcs.isConnected()}
           className="btn mt-3 text-[11px] border-warn text-warn hover:bg-warn/10"
-          title="即刻写 WIGA_GTEST_EN=0 → lua 软退到 ABORT_L1 phase"
+          title="即刻写 WIGA_GTEST_EN=0 → lua 软退到 DECEL phase"
         >
-          <RotateCcw size={11} className="inline mr-1" /> 强制关闭 GTEST_EN (软退 → ABORT_L1)
+          <RotateCcw size={11} className="inline mr-1" /> 强制关闭 GTEST_EN (软退 → DECEL)
         </button>
       </div>
     </div>
