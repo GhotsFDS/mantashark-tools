@@ -329,18 +329,18 @@ export function Auto() {
     // FLOAT_TAXI
     'WIGA_TAXI_DUR','WIGA_TAXI_THR_T',
     // TRANSITION (P7.9.4 新: K+ch3 lerp + V≥TX_V_OK → CRUISE)
-    'WIGA_TX_DUR','WIGA_TX_V_OK','WIGA_TX_TO_MS',
+    'WIGA_TX_K_RATE','WIGA_TX_CH3_RATE','WIGA_TX_V_OK','WIGA_TX_TO_MS',
     // CRUISE + 限时巡航
     'WIGA_CMAX_MS',
     // DECEL
-    'WIGA_DECEL_MS','WIGA_DECEL_V_OFF',
+    'WIGA_DEC_K_RATE','WIGA_DEC_CH3_RT','WIGA_DECEL_V_OFF',
     // Layer 1 (软减油)
     'WIGA_L1_BODY','WIGA_L1_RATE','WIGA_L1_MMS','WIGA_L1_CH3','WIGA_L1_R_PWM',
     'WIGA_L1_HOLD','WIGA_L1_REC_W','WIGA_L1_REC_MS',
     // Layer 2 (硬截 disarm)
     'WIGA_L2_BODY','WIGA_RATE_MMS',
     // Yaw P+I+D
-    'WIGA_HDG_HOLD_EN','WIGA_HDG_KP','WIGA_HDG_KI','WIGA_HDG_KD','WIGA_HDG_I_LIM',
+    'WIGA_HDG_HOLD_EN','WIGA_HDG_P','WIGA_HDG_I','WIGA_HDG_D','WIGA_HDG_I_LIM',
     // GTEST 地面测试
     'WIGA_GTEST_EN','WIGA_GTEST_PH','WIGA_GTEST_CAP',
     // Preflight
@@ -736,7 +736,7 @@ export function Auto() {
         </div>
 
         {phTab === 'TAXI' && (() => {
-          const keys = ['WIGA_TAXI_DUR','WIGA_TAXI_THR_T','WIGA_TAXI_THR_R'];
+          const keys = ['WIGA_TAXI_DUR','WIGA_TAXI_THR_T'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -745,7 +745,7 @@ export function Auto() {
               </div>
               {ParamRow({ k: "WIGA_TAXI_DUR",   unit: "ms",  hint: "浮筒滑水总时长, 跑完进 TRANSITION" })}
               {ParamRow({ k: "WIGA_TAXI_THR_T", unit: "",    hint: "末值油门 [0,1] (0.5=半推, 1.0=满推)" })}
-              {ParamRow({ k: "WIGA_TAXI_THR_R", unit: "1/s", hint: "ch3 ramp 速率 (0.3=满推约 3s 到位)" })}
+              {/* ch3 ramp 速率在 lua 内 hardcoded 600 PWM/s (set_ch3_slew), 没暴露 param */}
               <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
                 K 表 P7.9.4 内置 wig_control: TAXI = {`{KS=0.3 KDF=0.3 KT=0.3 KRD=0.3}`}. base_pitch=MSK_BPCH_G1=4°.
               </div>
@@ -754,76 +754,97 @@ export function Auto() {
         })()}
 
         {phTab === 'TRANS' && (() => {
-          const keys = ['WIGA_TX_DUR','WIGA_TX_V_OK','WIGA_TX_TO_MS'];
+          // P7.9.11/13 速率化: 撤 TX_DUR 固定时长, 改 K + ch3 每秒变化率 (归一化)
+          const keys = ['WIGA_TX_K_RATE','WIGA_TX_CH3_RATE','WIGA_TX_V_OK','WIGA_TX_TO_MS'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">TRANSITION (P7.9.4 单一 phase): K + ch3 同步 lerp TAXI→CRUISE, base_pitch=10°, V≥V_OK → CRUISE</span>
+                <span className="text-[10px] text-fg-dim">TRANSITION 速率化 (P7.9.13): K + ch3 各自按速率 ramp TAXI→CRUISE, V≥V_OK → CRUISE</span>
                 {CardSync({ keys, label: "TRANSITION" })}
               </div>
-              {ParamRow({ k: "WIGA_TX_DUR",   unit: "ms",  hint: "K + ch3 同步 lerp 时长 (默认 4000ms)" })}
-              {ParamRow({ k: "WIGA_TX_V_OK",  unit: "m/s", hint: "跃迁成功阈值 V (达到即进 CRUISE)" })}
-              {ParamRow({ k: "WIGA_TX_TO_MS", unit: "ms",  hint: "跃迁超时 (没达到 V_OK 自动 DECEL)" })}
+              {ParamRow({ k: "WIGA_TX_K_RATE",   unit: "/s",   hint: "K frac 进度 (0..1) 每秒变化. 0.25=4s 完成 TAXI→CRUISE K 切换" })}
+              {ParamRow({ k: "WIGA_TX_CH3_RATE", unit: "/s",   hint: "ch3 归一化 PWM /s (×1000 = PWM/s). 0.112 ≈ 112 PWM/s, 4s 涨 450 PWM" })}
+              {ParamRow({ k: "WIGA_TX_V_OK",     unit: "m/s",  hint: "跃迁成功阈值 V (达到即进 CRUISE)" })}
+              {ParamRow({ k: "WIGA_TX_TO_MS",    unit: "ms",   hint: "跃迁超时 (没达到 V_OK 自动 DECEL)" })}
               <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
-                K 表 P7.9.4 内置: TRANS = {`{KS=0.8 KDF=0.5 KT=0.3 KRD=0.3}`} (跃迁慢推). 入口立即 base_pitch=10°.
-                <br/>进 CRUISE 时 K_KT 一次性 0.3 → 0.5 (V_PI 中位).
+                K 表 P7.9.4 内置: TRANS = {`{KS=0.8 KDF=0.5 KT=0.3 KRD=0.3}`}. base_pitch=10°.
+                <br/>速率独立控 — K 跟 ch3 不同步. 进 CRUISE 时 K_KT 一次 0.3→0.5 (V_PI 中位).
               </div>
             </div>
           );
         })()}
 
         {phTab === 'CRUISE' && (() => {
-          const keys = ['WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_CMAX_MS'];
+          const keys = ['WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_CMAX_MS','WIGA_TRN_HDG','WIGA_TRN_DUR'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">稳态 cruise: V_PI 调 K_KT = 0.5 + V_COR (V_COR ±0.5 → K_KT ∈ [0, 1])</span>
+                <span className="text-[10px] text-fg-dim">稳态 cruise: V_PI 调 K_KT, 三档 ch7 选限时/无限/限时拐弯</span>
                 {CardSync({ keys, label: "CRUISE" })}
               </div>
               {ParamRow({ k: "WIGA_V_TGT",        unit: "m/s", hint: "V_PI 目标速度" })}
               {ParamRow({ k: "WIGA_V_CH10_EN",    unit: "0/1", hint: "=1 用 ch10 PWM 映射到 V_TGT (MSK_V_MIN/V_MAX 配)" })}
-              {ParamRow({ k: "WIGA_CMAX_MS",unit: "ms",  hint: "限时巡航 (0=无限, >0=N ms 自动 DECEL). 配合 ch7 latch 启用" })}
+              {ParamRow({ k: "WIGA_CMAX_MS",unit: "ms",  hint: "限时巡航 (0=无限, >0=N ms 后 DECEL 或 TURN). 配合 ch7 低/高启用" })}
+              <div className="mt-3 text-[10px] text-fg-dim font-medium">P7.9.16: ch7 高位 (≥1700) 拐弯参数</div>
+              {ParamRow({ k: "WIGA_TRN_HDG",      unit: "°",   hint: "转弯角度 (+右 / -左, 默认 90°)" })}
+              {ParamRow({ k: "WIGA_TRN_DUR",      unit: "ms",  hint: "转弯持续时长 (CMAX 完后跑这么久再 DECEL, 默认 5000ms)" })}
               <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
-                K=CRUISE 表 (KS=0.8 KDF=0.5 KT=0.5 KRD=0.5, manual G3 共用), V_PI 仅调 KT (= 0.5+V_COR ∈ [0,1]). ch3 锁 2000. base_pitch=10°.
-                <br/>限时启用: armed 时 ch7&lt;1300 latch _test_mode, V_PI 起算 N ms → DECEL.
+                K=CRUISE 表 (KS=0.8 KDF=0.5 KT=0.5 KRD=0.5), V_PI 调 KT. ch3=2000, base_pitch=10°.
+                <br/>ch7 三档 (armed 边沿 latch):
+                <br/>&nbsp;&nbsp;低 &lt;1300 → 限时, CMAX 后 DECEL
+                <br/>&nbsp;&nbsp;中 1300-1700 → 无限, 不动
+                <br/>&nbsp;&nbsp;高 ≥1700 → 限时拐弯, CMAX 后 TURN (转 TRN_HDG° 跑 TRN_DUR ms) → DECEL
               </div>
             </div>
           );
         })()}
 
         {phTab === 'DECEL' && (() => {
-          const keys = ['WIGA_DECEL_MS','WIGA_DECEL_V_OFF'];
+          // P7.9.11/13 速率化: 撤 DECEL_MS 固定时长, 改 K_KT + ch3 每秒下降率
+          const keys = ['WIGA_DEC_K_RATE','WIGA_DEC_CH3_RT','WIGA_DECEL_V_OFF'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">缓降单一 phase (P7.9.4): K_KT 0.5→0, ch3 2000→1100 over DECEL_MS</span>
+                <span className="text-[10px] text-fg-dim">DECEL 速率化 (P7.9.13): K_KT + ch3 各自按速率下降, V&lt;V_OFF + ch3 过半 → 自动 disarm</span>
                 {CardSync({ keys, label: "DECEL" })}
               </div>
-              {ParamRow({ k: "WIGA_DECEL_MS",     unit: "ms",  hint: "DECEL 总时长 (lerp K_KT + ch3)" })}
-              {ParamRow({ k: "WIGA_DECEL_V_OFF",  unit: "m/s", hint: "V 低于此值 + 时间过半 → arming:disarm() 进 IDLE" })}
+              {ParamRow({ k: "WIGA_DEC_K_RATE",   unit: "/s",   hint: "K_KT 每秒下降. 0.0625=8s 减 0.5 (CRUISE 末 0.5 → 0)" })}
+              {ParamRow({ k: "WIGA_DEC_CH3_RT",   unit: "/s",   hint: "ch3 归一化 PWM /s (×1000 = PWM/s). 0.112 ≈ 112 PWM/s, 8s 减 900 PWM" })}
+              {ParamRow({ k: "WIGA_DECEL_V_OFF",  unit: "m/s",  hint: "V 低于此值 + ch3 过半 → arming:disarm() 进 IDLE" })}
               <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
-                DECEL 入口: pilot 切 mode / GTEST 软退 / 限时巡航到期. base_pitch 回 4° (TAXI) 准备触水.
+                DECEL 入口: 限时巡航到期 / TURN 完 / NAV mission 末 WP / GTEST 软退 / 中途 disarm.
+                <br/>base_pitch 回 4° (TAXI). KT 自然到 0 时落水, ch3 过半 + V&lt; V_OFF 触发 disarm.
               </div>
             </div>
           );
         })()}
 
         {phTab === 'YAW' && (() => {
-          const keys = ['WIGA_HDG_HOLD_EN','WIGA_HDG_KP','WIGA_HDG_KI','WIGA_HDG_KD','WIGA_HDG_I_LIM'];
+          // P7.9.15: yaw 控制改 fork patch ATC angle path (跟 quadplane mission AUTO 同).
+          // lua 只设 _wig_state:yaw_target_active + yaw_target_cd, ATC 自跑 angle→rate 两环.
+          const keys = ['WIGA_HDG_HOLD_EN',
+                        'Q_A_ANG_YAW_P',
+                        'Q_A_RAT_YAW_P','Q_A_RAT_YAW_I','Q_A_RAT_YAW_D',
+                        'Q_A_INPUT_TC','Q_A_RATE_Y_MAX'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-fg-dim">Yaw P+I+D 慢校正 (denom 越大越温和)</span>
-                {CardSync({ keys, label: "Yaw" })}
+                <span className="text-[10px] text-fg-dim">Yaw heading hold — ATC 双环 (angle + rate)</span>
+                {CardSync({ keys, label: "Yaw ATC" })}
               </div>
-              {ParamRow({ k: "WIGA_HDG_HOLD_EN", unit: "0/1", hint: "1=lua 自动 yaw hold (override ch4), 0=pilot 手控 ch4" })}
-              {ParamRow({ k: "WIGA_HDG_KP",      unit: "denom", hint: "P denom (err=180° 才给满杆, default 180)" })}
-              {ParamRow({ k: "WIGA_HDG_KI",      unit: "denom", hint: "I denom (长期累积慢, default 3600)" })}
-              {ParamRow({ k: "WIGA_HDG_KD",      unit: "denom", hint: "D denom (err_rate=30°/s 满 D 阻尼)" })}
-              {ParamRow({ k: "WIGA_HDG_I_LIM",   unit: "", hint: "I 项 norm 上限 (anti-windup, default 0.3)" })}
+              {ParamRow({ k: "WIGA_HDG_HOLD_EN", unit: "0/1", hint: "1=ATC 锁 arming 时航向, 0=pilot 手控 ch4 stick" })}
+              <div className="mt-3 text-[10px] text-fg-dim font-medium">外环 angle (heading_err → yaw_rate target):</div>
+              {ParamRow({ k: "Q_A_ANG_YAW_P",   unit: "1/s", hint: "heading err × P → rate target (default 4.5, 大 = 转向快)" })}
+              <div className="mt-3 text-[10px] text-fg-dim font-medium">内环 rate (rate target → motor yaw):</div>
+              {ParamRow({ k: "Q_A_RAT_YAW_P",   unit: "", hint: "rate err P 项 (default 0.18)" })}
+              {ParamRow({ k: "Q_A_RAT_YAW_I",   unit: "", hint: "rate err I 项 累积 (default 0.018)" })}
+              {ParamRow({ k: "Q_A_RAT_YAW_D",   unit: "", hint: "rate err D 项 (default 0)" })}
+              <div className="mt-3 text-[10px] text-fg-dim font-medium">平滑/限幅:</div>
+              {ParamRow({ k: "Q_A_INPUT_TC",    unit: "s",   hint: "setpoint 平滑常数 (default 0.2s, heading 切换过渡)" })}
+              {ParamRow({ k: "Q_A_RATE_Y_MAX",  unit: "°/s", hint: "yaw 角速度上限 (fc default 75°/s, 0=不限)" })}
               <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
-                公式: norm = err/KP + ∫err/KI + err_rate/KD, clamp ±1, ch4 = 1500 - norm × 400.
-                <br/>FLOAT_TAXI / TRANSITION / CRUISE / DECEL 全程跑.
+                lua 调 _wig_state:yaw_target_cd 一次, ATC angle→rate→motor 两层自动跑.
+                <br/>航向锁定时机: arming 解锁瞬间 (lock_current_heading). FLOAT_TAXI / TRANSITION / CRUISE / DECEL 全程.
               </div>
             </div>
           );

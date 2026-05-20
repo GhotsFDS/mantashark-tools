@@ -3,7 +3,7 @@ import { useStore } from './store/useStore';
 import { gcs, GcsMessage } from './lib/gcs';
 import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
 import { Wifi, WifiOff } from 'lucide-react';
-import { Waves, Sliders, Grid3x3, Settings, PlugZap, FileSearch, Satellite, Bot } from 'lucide-react';
+import { Waves, Sliders, Grid3x3, Settings, PlugZap, FileSearch, Satellite, Bot, LineChart, MapPin } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
 import { Tilts } from './components/tabs/Tilts';
 import { Geometry } from './components/tabs/Geometry';
@@ -13,6 +13,8 @@ import { LogAnalysis } from './components/tabs/LogAnalysis';
 import { RtkSetup } from './components/tabs/RtkSetup';
 import { Auto } from './components/tabs/Auto';
 import { GroundTest } from './components/tabs/GroundTest';
+import { Plot } from './components/tabs/Plot';
+import { Map } from './components/tabs/Map';
 
 // v9 P7.5: GCS / 模式配置 / 地面测试 / 控制律 / 舵机标定 / RTK / LOG 分析 / 参数
 const TABS = [
@@ -21,6 +23,8 @@ const TABS = [
   { id: 'gtest',     label: '地面测试',     Icon: Grid3x3 },
   { id: 'profile',   label: '控制律',       Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
+  { id: 'plot',      label: '实时曲线',     Icon: LineChart },
+  { id: 'map',       label: '航点地图',     Icon: MapPin },
   { id: 'rtk',       label: 'RTK',          Icon: Satellite },
   { id: 'loganalysis', label: 'LOG 分析',   Icon: FileSearch },
   { id: 'params',    label: '参数',         Icon: Settings },
@@ -161,6 +165,8 @@ export default function App() {
       case 'profile':   return <FlightProfile />;
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry />;
+      case 'plot':      return <Plot />;
+      case 'map':       return <Map />;
       case 'rtk':       return <RtkSetup />;
       case 'loganalysis': return <LogAnalysis />;
       case 'params':    return <Params />;

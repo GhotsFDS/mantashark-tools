@@ -71,7 +71,8 @@ export const DEFAULT_PARAMS: ParamSet = {
   WIGA_TAXI_DUR:    3000,
   WIGA_TAXI_THR_T:  0.50,
   // D. DECEL (单一 phase, P7.9 合并旧 A/B/C)
-  WIGA_DECEL_MS:    8000,
+  WIGA_DEC_K_RATE:  0.0625,    // K_KT 每秒下降 (P7.9.13 撤 DECEL_MS)
+  WIGA_DEC_CH3_RT:  0.112,     // ch3 归一化 /s (×1000=PWM/s)
   WIGA_DECEL_V_OFF: 2.0,
   // E. Layer 1 (软减油救稳) — |body|>15° + rate + 持续 → ch3 平滑减 50%
   WIGA_L1_BODY:    15,
@@ -86,13 +87,14 @@ export const DEFAULT_PARAMS: ParamSet = {
   WIGA_L2_BODY:    20,
   WIGA_RATE_MMS:  300,        // L2 disarm 前缓冲 ms
   // G. Yaw P+I+D (慢校正)
-  WIGA_HDG_KP:    180,        // P denom
-  WIGA_HDG_KI:   3600,        // I denom (长期累积)
-  WIGA_HDG_KD:     30,        // D denom (阻尼)
-  WIGA_HDG_I_LIM: 0.3,        // I norm 上限
+  WIGA_HDG_P:    0.0056,       // P 归一化 (per °, 0.0056=180° 满杆) P7.9.13
+  WIGA_HDG_I:   0.000278,      // I 归一化 (per °·s)
+  WIGA_HDG_D:    0.0333,       // D 归一化 (per °/s)
+  WIGA_HDG_I_LIM: 0.3,         // I norm 上限
   WIGA_HDG_HOLD_EN: 1,        // 0 = pilot 手控 ch4
   // H. TRANSITION (新跃迁 phase)
-  WIGA_TX_DUR:   4000,        // K+ch3 lerp 时长
+  WIGA_TX_K_RATE:   0.25,      // TRANSITION K frac /s (P7.9.13 替代 TX_DUR)
+  WIGA_TX_CH3_RATE: 0.112,     // ch3 归一化 /s (×1000=PWM/s)
   WIGA_TX_V_OK:   5.0,        // 跃迁成功 V 阈值
   WIGA_TX_TO_MS: 8000,        // 跃迁超时 → DECEL
   // I. 限时巡航 (ch7<1300 armed latch 启用)
@@ -131,6 +133,10 @@ export const DEFAULT_PARAMS: ParamSet = {
   Q_A_RAT_YAW_I:    0.018,
   Q_A_RAT_YAW_D:    0,
   Q_A_ANG_YAW_P:    4.5,
+  // P7.9.15: yaw setpoint shaping (ATC angle path 用, 跟 fork patch input_euler_angle_yaw 配)
+  // 真名 (ArduPilot 实测): Q_A_INPUT_TC / Q_A_RATE_Y_MAX  (之前误用 ATC_INPUT_TC / ANG_VEL_YAW_MAX)
+  Q_A_INPUT_TC:     0.2,     // setpoint 平滑常数 s (default 0.15-0.2)
+  Q_A_RATE_Y_MAX:   75,      // yaw 角速度上限 °/s (0=不限, fc default 75)
 };
 
 // ═══ ATC 原生参数白名单 (控制律 tab pull/push 用) ═══
@@ -141,6 +147,7 @@ export const ATC_NATIVE_KEYS: string[] = [
   'Q_A_ANG_RLL_P', 'Q_A_ANG_PIT_P', 'Q_A_ANG_YAW_P', 'Q_A_ANGLE_MAX',
   'PTCH_LIM_MAX_DEG', 'PTCH_LIM_MIN_DEG', 'ROLL_LIMIT_DEG',
   'Q_M_THST_HOVER',
+  'Q_A_INPUT_TC', 'Q_A_RATE_Y_MAX',
 ];
 
 // P7.9.4: 撤 'WIGK' (整表撤了), 留 MSK / TLT / WIGA
@@ -199,8 +206,12 @@ export function paramRange(key: string): { min: number; max: number; step: numbe
   if (key === 'WIGA_TAXI_DUR')       return { min: 0, max: 30000, step: 100 };
   if (key === 'WIGA_TAXI_THR_T')     return { min: 0, max: 1, step: 0.05 };
   // DECEL
-  if (key === 'WIGA_DECEL_MS')       return { min: 1000, max: 30000, step: 100 };
+  if (key === 'WIGA_DEC_K_RATE')     return { min: 0, max: 1, step: 0.005 };
+  if (key === 'WIGA_DEC_CH3_RT')     return { min: 0, max: 2, step: 0.01 };
   if (key === 'WIGA_DECEL_V_OFF')    return { min: 0, max: 10, step: 0.1 };
+  if (key === 'WIGA_TX_V_OK')        return { min: 0, max: 15, step: 0.1 };
+  if (key === 'WIGA_TRN_HDG')        return { min: -180, max: 180, step: 1 };
+  if (key === 'WIGA_TRN_DUR')        return { min: 0, max: 30000, step: 100 };
   // Layer 1+2
   if (key === 'WIGA_L1_BODY' || key === 'WIGA_L2_BODY' || key === 'WIGA_L1_REC_W')
                                       return { min: 0, max: 90, step: 1 };
@@ -211,13 +222,14 @@ export function paramRange(key: string): { min: number; max: number; step: numbe
   if (key === 'WIGA_L1_CH3')         return { min: 1000, max: 2000, step: 10 };
   if (key === 'WIGA_L1_R_PWM')       return { min: 100, max: 2000, step: 50 };
   // Yaw P+I+D
-  if (key === 'WIGA_HDG_KP' || key === 'WIGA_HDG_KD')
-                                      return { min: 1, max: 500, step: 1 };
-  if (key === 'WIGA_HDG_KI')         return { min: 100, max: 10000, step: 100 };
+  if (key === 'WIGA_HDG_P')          return { min: 0, max: 0.1, step: 0.0005 };
+  if (key === 'WIGA_HDG_I')          return { min: 0, max: 0.01, step: 0.00005 };
+  if (key === 'WIGA_HDG_D')          return { min: 0, max: 0.5, step: 0.001 };
   if (key === 'WIGA_HDG_I_LIM')      return { min: 0, max: 1, step: 0.05 };
   // TRANSITION
-  if (key === 'WIGA_TX_DUR' || key === 'WIGA_TX_TO_MS')
-                                      return { min: 500, max: 20000, step: 100 };
+  if (key === 'WIGA_TX_TO_MS')       return { min: 500, max: 20000, step: 100 };
+  if (key === 'WIGA_TX_K_RATE')      return { min: 0, max: 2, step: 0.01 };
+  if (key === 'WIGA_TX_CH3_RATE')    return { min: 0, max: 2, step: 0.01 };
   if (key === 'WIGA_TX_V_OK')        return { min: 1, max: 15, step: 0.1 };
   // 限时巡航
   if (key === 'WIGA_CMAX_MS')  return { min: 0, max: 120000, step: 1000 };
@@ -234,6 +246,8 @@ export function paramRange(key: string): { min: number; max: number; step: numbe
   if (/^Q_A_RAT_(RLL|PIT|YAW)_D$/.test(key))     return { min: 0, max: 0.1, step: 0.0005 };
   if (/^Q_A_ANG_(RLL|PIT|YAW)_P$/.test(key))     return { min: 0, max: 12, step: 0.1 };
   if (key === 'Q_A_ANGLE_MAX')       return { min: 0, max: 45, step: 1 };
+  if (key === 'Q_A_INPUT_TC')        return { min: 0, max: 1, step: 0.01 };
+  if (key === 'Q_A_RATE_Y_MAX')      return { min: 0, max: 180, step: 1 };
   if (key === 'PTCH_LIM_MAX_DEG' || key === 'ROLL_LIMIT_DEG')
                                       return { min: 0, max: 90, step: 1 };
   if (key === 'PTCH_LIM_MIN_DEG')    return { min: -90, max: 0, step: 1 };

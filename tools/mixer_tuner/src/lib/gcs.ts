@@ -140,7 +140,7 @@ export class GcsClient {
     onProgress?: (got: number, total: number) => void,
     timeoutMs?: number,
   ): Promise<{ got: number; missing: string[]; timedOut: boolean }> {
-    const t = timeoutMs && timeoutMs > 0 ? timeoutMs : Math.max(8000, 8000 + keys.length * 350);
+    const baseT = timeoutMs && timeoutMs > 0 ? timeoutMs : Math.max(8000, 8000 + keys.length * 350);
     return new Promise((resolve) => {
       if (!this.isConnected()) {
         resolve({ got: 0, missing: keys, timedOut: false });
@@ -149,6 +149,8 @@ export class GcsClient {
       }
       const remaining = new Set(keys);
       let got = 0;
+      let retryRound = 0;
+      const MAX_RETRY = 3;   // USB ACM 链路 burst 时 fc UART output queue 偶发 drop, retry missing
       const off = this.on((m) => {
         if (m.type === 'param' && remaining.has(m.name)) {
           remaining.delete(m.name);
@@ -162,9 +164,25 @@ export class GcsClient {
         off();
         resolve({ got, missing: [...remaining], timedOut });
       };
-      const timer = setTimeout(() => finish(true), t);
-      // 50ms/次 节流防 ws 拥塞 + 数传链路 buffer overflow (低速 SiK 实测安全间隔)
-      keys.forEach((k, i) => setTimeout(() => this.readParam(k), i * 50));
+      // 第一轮 + retry 用同一个 long timer 兜底
+      const timer = setTimeout(() => finish(true), baseT + MAX_RETRY * 2500);
+      const sendBatch = (batch: string[]) => {
+        // 50ms/次 节流防 ws 拥塞 + fc UART output queue overflow (低速 SiK 实测安全间隔)
+        batch.forEach((k, i) => setTimeout(() => this.readParam(k), i * 50));
+      };
+      const retryMissing = () => {
+        if (remaining.size === 0 || retryRound >= MAX_RETRY) {
+          if (remaining.size === 0) finish(false);
+          return;
+        }
+        retryRound++;
+        sendBatch([...remaining]);
+        // 给本轮 missing 2.5s 收回 (50ms × max 50 keys + buffer)
+        setTimeout(retryMissing, 2500);
+      };
+      sendBatch(keys);
+      // 第一轮发完后给 max(baseT/2, 4s) 等收, 之后开始 retry missing
+      setTimeout(retryMissing, Math.max(baseT - MAX_RETRY * 2500, 4000));
     });
   }
 

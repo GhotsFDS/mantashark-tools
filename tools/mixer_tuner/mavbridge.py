@@ -215,6 +215,14 @@ class Bridge:
         # SERVO_OUTPUT_RAW 24 路缓存 (按 port 字段分段):
         # port=0 → 1-8, port=1 → 9-16, port=2 → 17-24 (倾转舵 RDL/RDR/SGRP 在这)
         self.servo_buf = [0] * 24
+
+        # ═════════════ MAVLink mission protocol state (参考 MP saveWPs) ═════════════
+        # upload: Tuner→fc.  收 MISSION_REQUEST_INT(seq) → 弹 _mission_upload[seq] 发 MISSION_ITEM_INT
+        self._mission_upload = None       # None or list of {lat, lon, alt, cmd}
+        self._mission_upload_start_ms = 0
+        # download: fc→Tuner.  收 MISSION_COUNT(N) → 循环 MISSION_REQUEST_INT(0..N-1) → 收 MISSION_ITEM_INT
+        self._mission_download = None     # None or {count, items: list, next_seq}
+        self._mission_download_start_ms = 0
         # 电池缓存 — ArduPilot BATTERY_STATUS 偶尔发 current=-1 (该帧未读到), 保持上次有效值防跳变
         self.last_battery_current = None
         self.last_battery_voltage = 0
@@ -408,6 +416,85 @@ class Bridge:
                         'remaining': self.last_battery_remaining,
                         'consumed_mah': self.last_battery_consumed,
                         'fallback': True}
+            # ═════════════ Mission protocol (参考 MP saveWPs) ═════════════
+            elif t in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
+                # fc → GCS: 请求第 seq 个 mission item, 我们 upload state 弹一个
+                if self._mission_upload is not None:
+                    seq = int(m.seq)
+                    if 0 <= seq < len(self._mission_upload):
+                        wp = self._mission_upload[seq]
+                        # 用 MISSION_ITEM_INT (lat/lon 整数 1e-7 deg, 精度高于 float)
+                        self.mav.mav.mission_item_int_send(
+                            self._sys, self._comp,
+                            seq,
+                            int(wp.get('frame', mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT)),
+                            int(wp.get('cmd', mavutil.mavlink.MAV_CMD_NAV_WAYPOINT)),
+                            0, 1,                              # current, autocontinue
+                            float(wp.get('p1', 0)), float(wp.get('p2', 0)),
+                            float(wp.get('p3', 0)), float(wp.get('p4', 0)),
+                            int(wp['lat'] * 1e7),
+                            int(wp['lon'] * 1e7),
+                            float(wp.get('alt', 0)),
+                            mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                        continue   # 不广播给 WS
+            elif t == 'MISSION_ACK':
+                # upload 完成
+                if self._mission_upload is not None:
+                    res = int(m.type)
+                    res_name = mavutil.mavlink.enums['MAV_MISSION_RESULT'][res].name if res in mavutil.mavlink.enums['MAV_MISSION_RESULT'] else str(res)
+                    elapsed = (time.time() * 1000) - self._mission_upload_start_ms
+                    data = {'type': 'mission_uploaded',
+                            'count': len(self._mission_upload),
+                            'result': res, 'result_name': res_name,
+                            'elapsed_ms': int(elapsed)}
+                    self._mission_upload = None
+            elif t == 'MISSION_COUNT':
+                # download 流程: fc 报 N → 启动 request 循环
+                if self._mission_download is not None:
+                    self._mission_download['count'] = int(m.count)
+                    self._mission_download['items'] = [None] * int(m.count)
+                    self._mission_download['next_seq'] = 0
+                    if m.count > 0:
+                        self.mav.mav.mission_request_int_send(
+                            self._sys, self._comp, 0,
+                            mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                    else:
+                        # 空 mission, 直接 ACK
+                        self.mav.mav.mission_ack_send(self._sys, self._comp,
+                                                      mavutil.mavlink.MAV_MISSION_ACCEPTED,
+                                                      mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                        data = {'type': 'mission_list', 'count': 0, 'wps': []}
+                        self._mission_download = None
+            elif t == 'MISSION_ITEM_INT':
+                # download 收 item
+                if self._mission_download is not None:
+                    seq = int(m.seq)
+                    if 0 <= seq < self._mission_download['count']:
+                        self._mission_download['items'][seq] = {
+                            'seq': seq,
+                            'frame': int(m.frame),
+                            'cmd': int(m.command),
+                            'lat': m.x / 1e7,
+                            'lon': m.y / 1e7,
+                            'alt': float(m.z),
+                            'p1': float(m.param1), 'p2': float(m.param2),
+                            'p3': float(m.param3), 'p4': float(m.param4),
+                        }
+                    next_seq = seq + 1
+                    if next_seq < self._mission_download['count']:
+                        self._mission_download['next_seq'] = next_seq
+                        self.mav.mav.mission_request_int_send(
+                            self._sys, self._comp, next_seq,
+                            mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                    else:
+                        # 全收完, ACK + 转发
+                        self.mav.mav.mission_ack_send(self._sys, self._comp,
+                                                      mavutil.mavlink.MAV_MISSION_ACCEPTED,
+                                                      mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                        data = {'type': 'mission_list',
+                                'count': self._mission_download['count'],
+                                'wps': self._mission_download['items']}
+                        self._mission_download = None
             else:
                 continue
             if data is not None and self.loop is not None:
@@ -460,6 +547,35 @@ class Bridge:
                 elif t == 'reboot':
                     self.mav.mav.command_long_send(self._sys, self._comp, 246, 0,
                                                     1, 0, 0, 0, 0, 0, 0)
+                elif t == 'mission_upload':
+                    # Tuner → fc: 上传 WP 列表 (参考 MP saveWPs)
+                    # ⚠ ArduPlane 强制 seq=0 = home (no-op replace user data), 必须 prepend home,
+                    # user WPs 从 seq=1 起算 (跟 MP commandlist.Insert(0, home) 一致)
+                    wps = req.get('wps') or []
+                    if not isinstance(wps, list):
+                        await ws.send(json.dumps({'type':'mission_uploaded','error':'wps must be list'}))
+                        continue
+                    # prepend home dummy (用 user 第一个 WP 当 home 占位, ArduPlane 内部用 GPS 真实 home 替换)
+                    home = {'lat': wps[0]['lat'] if wps else 0.0, 'lon': wps[0]['lon'] if wps else 0.0,
+                            'alt': 0.0, 'frame': mavutil.mavlink.MAV_FRAME_GLOBAL}
+                    self._mission_upload = [home] + wps
+                    self._mission_upload_start_ms = int(time.time() * 1000)
+                    self.mav.mav.mission_count_send(self._sys, self._comp,
+                                                    len(self._mission_upload),
+                                                    mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                    await ws.send(json.dumps({'type':'mission_upload_started','count':len(wps)}))
+                elif t == 'mission_download':
+                    # Tuner → fc: 拉 fc 上当前 mission (启动 request_list)
+                    self._mission_download = {'count': 0, 'items': [], 'next_seq': 0}
+                    self._mission_download_start_ms = int(time.time() * 1000)
+                    self.mav.mav.mission_request_list_send(self._sys, self._comp,
+                                                            mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                    await ws.send(json.dumps({'type':'mission_download_started'}))
+                elif t == 'mission_clear':
+                    # 清 fc 上 mission
+                    self.mav.mav.mission_clear_all_send(self._sys, self._comp,
+                                                        mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                    await ws.send(json.dumps({'type':'mission_cleared'}))
                 elif t == 'motor_test':
                     # MAV_CMD_DO_MOTOR_TEST = 209
                     # 绕过 Q_M_PWM disarmed 强制 0, 用 ArduPilot 内置 motor_test, 不需 arm
