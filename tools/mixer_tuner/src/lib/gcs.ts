@@ -5,7 +5,7 @@ export type GcsMessage =
   | { type: 'heartbeat'; mode: string; custom_mode?: number; armed: boolean }
   | { type: 'attitude'; roll: number; pitch: number; yaw: number }
   | { type: 'vfr_hud'; airspeed: number; groundspeed: number; alt: number; climb: number; throttle: number }
-  | { type: 'gps'; fix_type: number; sats: number; hdop: number | null; yaw_deg?: number | null; alt_m?: number; vel_mps?: number | null; gps_id?: number }
+  | { type: 'gps'; fix_type: number; sats: number; hdop: number | null; lat?: number; lon?: number; hdg?: number; yaw_deg?: number | null; alt_m?: number; vel_mps?: number | null; gps_id?: number }
   | { type: 'gps2'; fix_type: number; sats: number; hdop: number | null; yaw_deg?: number | null; alt_m?: number; vel_mps?: number | null; gps_id?: number }
   | { type: 'param'; name: string; value: number; index: number; count: number }
   | { type: 'statustext'; severity: number; text: string }

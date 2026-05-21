@@ -324,14 +324,17 @@ export function Auto() {
     // P7.9.4: 全部 WIGA_/MSK_ 真实 lua 注册参数 (撤旧 WIGK_/FV_/RV_/DF_/DEC_*/TX_*/CRUISE_MODE/STRAT/FAC)
     // V 控制
     'WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_PREFLT_REQ',
-    'MSK_BPCH_G1','MSK_BPCH_G2',
+    'MSK_BPCH_G1','MSK_BPCH_G2','MSK_BPCH_G3',
     'MSK_V_MIN','MSK_V_MAX',
+    'MSK_V_PI_P','MSK_V_PI_I','MSK_V_PI_D','MSK_V_INT_LIM',
+    // P7.9.21: pitch V-scaling gain schedule
+    'MSK_PSC_EN','MSK_PSC_V_LO','MSK_PSC_V_HI','MSK_PSC_MIN','MSK_PSC_EXP',
     // FLOAT_TAXI
     'WIGA_TAXI_DUR','WIGA_TAXI_THR_T',
     // TRANSITION (P7.9.4 新: K+ch3 lerp + V≥TX_V_OK → CRUISE)
     'WIGA_TX_K_RATE','WIGA_TX_CH3_RATE','WIGA_TX_V_OK','WIGA_TX_TO_MS',
-    // CRUISE + 限时巡航
-    'WIGA_CMAX_MS',
+    // CRUISE + 限时巡航 + P7.9.20 RV 后出气
+    'WIGA_CMAX_MS','WIGA_RV_EN','WIGA_RV_SGRP','WIGA_RV_HALF',
     // DECEL
     'WIGA_DEC_K_RATE','WIGA_DEC_CH3_RT','WIGA_DECEL_V_OFF',
     // Layer 1 (软减油)
@@ -775,7 +778,8 @@ export function Auto() {
         })()}
 
         {phTab === 'CRUISE' && (() => {
-          const keys = ['WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_CMAX_MS','WIGA_TRN_HDG','WIGA_TRN_DUR'];
+          const keys = ['WIGA_V_TGT','WIGA_V_CH10_EN','WIGA_CMAX_MS','WIGA_TRN_HDG','WIGA_TRN_DUR',
+                        'WIGA_RV_EN','WIGA_RV_SGRP','WIGA_RV_HALF','MSK_BPCH_G3','MSK_V_PI_P'];
           return (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -785,11 +789,23 @@ export function Auto() {
               {ParamRow({ k: "WIGA_V_TGT",        unit: "m/s", hint: "V_PI 目标速度" })}
               {ParamRow({ k: "WIGA_V_CH10_EN",    unit: "0/1", hint: "=1 用 ch10 PWM 映射到 V_TGT (MSK_V_MIN/V_MAX 配)" })}
               {ParamRow({ k: "WIGA_CMAX_MS",unit: "ms",  hint: "限时巡航 (0=无限, >0=N ms 后 DECEL 或 TURN). 配合 ch7 低/高启用" })}
-              <div className="mt-3 text-[10px] text-fg-dim font-medium">P7.9.16: ch7 高位 (≥1700) 拐弯参数</div>
+
+              <div className="mt-3 text-[10px] text-fg-dim font-medium border-t border-line/30 pt-2">
+                P7.9.20: 后出气巡航 RV (CRUISE entry 写 SGRP body GOAL, ±tilt 范围)
+              </div>
+              {ParamRow({ k: "WIGA_RV_EN",   unit: "0/1", hint: "0=off (沿用 EEPROM SGRP) / 1=on (CRUISE entry 写 RV)" })}
+              {ParamRow({ k: "WIGA_RV_SGRP", unit: "°",   hint: "RV SGRP body GOAL (默认 60°, 偏平后出气)" })}
+              {ParamRow({ k: "WIGA_RV_HALF", unit: "°",   hint: "±tilt 范围 (LMIN=GOAL-HALF, LMAX=GOAL+HALF, 默认 10°)" })}
+              {ParamRow({ k: "MSK_BPCH_G3",  unit: "°",   hint: "CRUISE 专用 base_pitch (RV 偏平, 默认 5°)" })}
+              {ParamRow({ k: "MSK_V_PI_P",   unit: "",    hint: "V_PI P 增益 (默认 0.3, LOG 223 实测 0.1 太软)" })}
+
+              <div className="mt-3 text-[10px] text-fg-dim font-medium border-t border-line/30 pt-2">
+                P7.9.16: ch7 高位 (≥1700) 拐弯参数
+              </div>
               {ParamRow({ k: "WIGA_TRN_HDG",      unit: "°",   hint: "转弯角度 (+右 / -左, 默认 90°)" })}
               {ParamRow({ k: "WIGA_TRN_DUR",      unit: "ms",  hint: "转弯持续时长 (CMAX 完后跑这么久再 DECEL, 默认 5000ms)" })}
               <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
-                K=CRUISE 表 (KS=0.8 KDF=0.5 KT=0.5 KRD=0.5), V_PI 调 KT. ch3=2000, base_pitch=10°.
+                K=CRUISE 表 (KS=0.8 KDF=0.5 KT=0.5 KRD=0.5), V_PI 调 KT. ch3=2000, base_pitch=MSK_BPCH_G3.
                 <br/>ch7 三档 (armed 边沿 latch):
                 <br/>&nbsp;&nbsp;低 &lt;1300 → 限时, CMAX 后 DECEL
                 <br/>&nbsp;&nbsp;中 1300-1700 → 无限, 不动
@@ -921,6 +937,25 @@ export function Auto() {
             <div className="text-[10px] text-fg-dim mt-1">
               WIGA_V_CH10_EN=1 时 V_PI 读 ch10 映射. =0 用 WIGA_V_TGT 静态.
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ═════════ Section 9: pitch V-scaling gain schedule (P7.9.21) ═════════ */}
+      <div className="card">
+        <div className="flex items-center mb-3">
+          <span className="card-title mb-0 flex-1">Pitch V-scaling gain schedule (P7.9.21, 高速缩 pitch 权威)</span>
+          {CardSync({ keys: ['MSK_PSC_EN','MSK_PSC_V_LO','MSK_PSC_V_HI','MSK_PSC_MIN','MSK_PSC_EXP'], label: "PSC" })}
+        </div>
+        <div className="space-y-1">
+          {ParamRow({ k: "MSK_PSC_EN",   unit: "0/1",  hint: "V-scale 开关 (off 退化到全权威)" })}
+          {ParamRow({ k: "MSK_PSC_V_LO", unit: "m/s",  hint: "V≤LO 时 scale=1 (满权威, 默认 5)" })}
+          {ParamRow({ k: "MSK_PSC_V_HI", unit: "m/s",  hint: "V≥HI 时 scale=MIN (默认 12)" })}
+          {ParamRow({ k: "MSK_PSC_MIN",  unit: "",     hint: "高速保留比例 0-1 (默认 0.3 = 30% 权威)" })}
+          {ParamRow({ k: "MSK_PSC_EXP",  unit: "",     hint: "曲线 (1=linear, >1 后期急减, 0.5-3)" })}
+          <div className="mt-2 text-[10px] text-fg-dim pt-2 border-t border-line/30">
+            高速时 pitch ATC 输出乘 scale: V≤V_LO → 1, V≥V_HI → MIN, 中间按 EXP 曲线插值.
+            <br/>防 CRUISE 高速 pitch 过激 (体平面 RV 偏平时 pitch 误差放大易撞限).
           </div>
         </div>
       </div>

@@ -315,12 +315,16 @@ class Bridge:
                         'alt': m.alt, 'climb': m.climb, 'throttle': m.throttle}
             elif t == 'GPS_RAW_INT':
                 # v9 P4: 扩 yaw (双头 RTK heading, cdeg, 0=invalid) + alt + vel
+                # P7.9.25: 加 lat/lon (Map tab 显示当前位置) + hdg (cog)
                 yaw_cd = getattr(m, 'yaw', 0)
                 yaw_deg = (yaw_cd / 100.0) if yaw_cd and yaw_cd != 0 else None
                 data = {'type': 'gps',
                         'fix_type': m.fix_type,
                         'sats': m.satellites_visible,
                         'hdop': m.eph / 100.0 if m.eph != 0xFFFF else None,
+                        'lat': m.lat,                # degE7 (Map.tsx /1e7)
+                        'lon': m.lon,                # degE7
+                        'hdg': getattr(m, 'cog', 0), # course over ground cdeg (Map /100)
                         'yaw_deg': yaw_deg,
                         'alt_m': (m.alt / 1000.0) if m.alt else 0,
                         'vel_mps': (m.vel / 100.0) if m.vel != 0xFFFF else None,
