@@ -23,13 +23,20 @@ import type { ParamSet } from './types';
 
 export const DEFAULT_PARAMS: ParamSet = {
   // ═══ MSK_ (key=81) — V_PI 速度环 + base_pitch ═══
-  MSK_V_PI_P: 0.05,
+  MSK_V_PI_P: 0.3,            // P7.9.20: 0.05→0.3 (LOG 223 0.1 太软 vc 只到 -0.295)
   MSK_V_PI_I: 0.02,
   MSK_V_PI_D: 0.0,
   MSK_V_INT_LIM: 5.0,
   MSK_TRIM_RATE: 99.0,        // base_pitch ramp °/s (≈阶跃)
   MSK_BPCH_G1: 4,             // TAXI base_pitch (LOG 190 实测)
-  MSK_BPCH_G2: 10,            // TRANS = CRUISE base_pitch
+  MSK_BPCH_G2: 10,            // TRANS base_pitch (抬头建气垫)
+  MSK_BPCH_G3: 5,             // P7.9.20: CRUISE base_pitch 独立 (RV 偏平, 设计 5°)
+  // P7.9.21: pitch V-scaling gain schedule
+  MSK_PSC_EN:    1,           // 0=off / 1=on (high V 缩 pitch_out)
+  MSK_PSC_V_LO:  5,           // V≤LO 满权威 m/s
+  MSK_PSC_V_HI: 12,           // V≥HI scale=MIN m/s
+  MSK_PSC_MIN: 0.3,           // 高速保留比例 0-1
+  MSK_PSC_EXP: 1.0,           // 曲线 0.5-3 (1=linear)
   MSK_V_MIN:  3.0,            // ch10 V_TGT 映射下限
   MSK_V_MAX: 10.0,            // ch10 V_TGT 映射上限
 
@@ -99,6 +106,10 @@ export const DEFAULT_PARAMS: ParamSet = {
   WIGA_TX_TO_MS: 8000,        // 跃迁超时 → DECEL
   // I. 限时巡航 (ch7<1300 armed latch 启用)
   WIGA_CMAX_MS: 0,      // 0=无限, >0=N ms 自动 DECEL
+  // P7.9.20: 后出气巡航 RV (恢复 P7.9.4 砍掉的 FV/RV 切换)
+  WIGA_RV_EN:    1,            // 0=off (沿用 EEPROM SGRP) / 1=on (CRUISE entry 写 RV)
+  WIGA_RV_SGRP: 60,            // RV SGRP body GOAL deg
+  WIGA_RV_HALF: 10,            // ±tilt 范围 deg (LMIN=GOAL-HALF, LMAX=GOAL+HALF)
   // J. GTEST 地面测试 (跟 cruise 独立)
   WIGA_GTEST_EN:    0,
   WIGA_GTEST_PH:    1,        // 1=FLOAT_TAXI 2=TRANSITION 3=CRUISE 4=DECEL
@@ -212,6 +223,15 @@ export function paramRange(key: string): { min: number; max: number; step: numbe
   if (key === 'WIGA_TX_V_OK')        return { min: 0, max: 15, step: 0.1 };
   if (key === 'WIGA_TRN_HDG')        return { min: -180, max: 180, step: 1 };
   if (key === 'WIGA_TRN_DUR')        return { min: 0, max: 30000, step: 100 };
+  if (key === 'WIGA_RV_EN')          return { min: 0, max: 1, step: 1 };
+  if (key === 'WIGA_RV_SGRP')        return { min: 30, max: 90, step: 1 };
+  if (key === 'WIGA_RV_HALF')        return { min: 0, max: 30, step: 1 };
+  if (key === 'MSK_BPCH_G3')         return { min: 0, max: 20, step: 1 };
+  if (key === 'MSK_PSC_EN')          return { min: 0, max: 1, step: 1 };
+  if (key === 'MSK_PSC_V_LO')        return { min: 0, max: 20, step: 0.5 };
+  if (key === 'MSK_PSC_V_HI')        return { min: 0, max: 25, step: 0.5 };
+  if (key === 'MSK_PSC_MIN')         return { min: 0.1, max: 1, step: 0.05 };
+  if (key === 'MSK_PSC_EXP')         return { min: 0.5, max: 3, step: 0.1 };
   // Layer 1+2
   if (key === 'WIGA_L1_BODY' || key === 'WIGA_L2_BODY' || key === 'WIGA_L1_REC_W')
                                       return { min: 0, max: 90, step: 1 };
