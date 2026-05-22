@@ -37,6 +37,10 @@ export const DEFAULT_PARAMS: ParamSet = {
   MSK_PSC_V_HI: 12,           // V≥HI scale=MIN m/s
   MSK_PSC_MIN: 0.3,           // 高速保留比例 0-1
   MSK_PSC_EXP: 1.0,           // 曲线 0.5-3 (1=linear)
+  // P7.9.27: V_PI per-group 速度权重 (EN=0 时 boost 同 KT/KS, EN=1 用 W_KT/W_KS)
+  MSK_V_W_EN:    0,           // 0=off (= P7.9.19 行为) / 1=on
+  MSK_V_W_KT:  1.0,           // KT 速度权重 0-2
+  MSK_V_W_KS:  1.0,           // KS 速度权重 0-2
   MSK_V_MIN:  3.0,            // ch10 V_TGT 映射下限
   MSK_V_MAX: 10.0,            // ch10 V_TGT 映射上限
 
@@ -107,9 +111,12 @@ export const DEFAULT_PARAMS: ParamSet = {
   // I. 限时巡航 (ch7<1300 armed latch 启用)
   WIGA_CMAX_MS: 0,      // 0=无限, >0=N ms 自动 DECEL
   // P7.9.20: 后出气巡航 RV (恢复 P7.9.4 砍掉的 FV/RV 切换)
-  WIGA_RV_EN:    1,            // 0=off (沿用 EEPROM SGRP) / 1=on (CRUISE entry 写 RV)
+  WIGA_RV_EN:    1,            // 0=FV (前出气) / 1=RV (后出气)
   WIGA_RV_SGRP: 60,            // RV SGRP body GOAL deg
-  WIGA_RV_HALF: 10,            // ±tilt 范围 deg (LMIN=GOAL-HALF, LMAX=GOAL+HALF)
+  WIGA_RV_HALF: 10,            // RV ±tilt 范围 deg
+  // P7.9.27: FV (前出气) 巡航也参数化, 之前只 RV 可调
+  WIGA_FV_SGRP: 35,            // FV SGRP body GOAL deg (近垂直, 主升力)
+  WIGA_FV_HALF: 10,            // FV ±tilt 范围 deg
   // J. GTEST 地面测试 (跟 cruise 独立)
   WIGA_GTEST_EN:    0,
   WIGA_GTEST_PH:    1,        // 1=FLOAT_TAXI 2=TRANSITION 3=CRUISE 4=DECEL
@@ -226,6 +233,11 @@ export function paramRange(key: string): { min: number; max: number; step: numbe
   if (key === 'WIGA_RV_EN')          return { min: 0, max: 1, step: 1 };
   if (key === 'WIGA_RV_SGRP')        return { min: 30, max: 90, step: 1 };
   if (key === 'WIGA_RV_HALF')        return { min: 0, max: 30, step: 1 };
+  if (key === 'WIGA_FV_SGRP')        return { min: 0, max: 60, step: 1 };
+  if (key === 'WIGA_FV_HALF')        return { min: 0, max: 30, step: 1 };
+  if (key === 'MSK_V_W_EN')          return { min: 0, max: 1, step: 1 };
+  if (key === 'MSK_V_W_KT')          return { min: 0, max: 2, step: 0.05 };
+  if (key === 'MSK_V_W_KS')          return { min: 0, max: 2, step: 0.05 };
   if (key === 'MSK_BPCH_G3')         return { min: 0, max: 20, step: 1 };
   if (key === 'MSK_PSC_EN')          return { min: 0, max: 1, step: 1 };
   if (key === 'MSK_PSC_V_LO')        return { min: 0, max: 20, step: 0.5 };
