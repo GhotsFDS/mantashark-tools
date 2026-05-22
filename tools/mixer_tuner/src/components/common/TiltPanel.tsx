@@ -168,7 +168,8 @@ export function TiltPanel({ t }: Props) {
       </div>
 
       {/* 方向 (三态: +1 / 0 锁 / -1) + ATC fb 带宽 + PER_DEG */}
-      <div className="grid grid-cols-3 gap-2 mt-3">
+      {/* P7.9.28: no_atc_fb (TL2/TR2) 跳 BW 栏, 用 2 列布局 */}
+      <div className={'grid gap-2 mt-3 ' + (t.no_atc_fb ? 'grid-cols-2' : 'grid-cols-3')}>
         <div>
           <div className="label mb-1">DIR (0=锁)</div>
           <div className="flex">
@@ -181,16 +182,18 @@ export function TiltPanel({ t }: Props) {
                     onClick={() => pushParam(dirKey, -1)}>−1</button>
           </div>
         </div>
-        <div>
-          <div className="label mb-1" title="ATC fb 带宽倍率: target = goal + signed_fb × BW × swing / po_norm. lua clamp [0.1, 5.0]">BW (ATC 灵敏度)</div>
-          <input type="number" min={0.1} max={5.0} step={0.1}
-                 value={bw}
-                 onChange={e => {
-                   const v = parseFloat(e.target.value);
-                   if (!isNaN(v) && v >= 0.1 && v <= 5.0) pushParam(bwKey, v);
-                 }}
-                 className={'input w-full val-mono ' + (bw > 5.0 ? 'ring-1 ring-warn rounded' : '')} />
-        </div>
+        {!t.no_atc_fb && (
+          <div>
+            <div className="label mb-1" title="ATC fb 带宽倍率: target = goal + signed_fb × BW × swing / po_norm. lua clamp [0.1, 5.0]">BW (ATC 灵敏度)</div>
+            <input type="number" min={0.1} max={5.0} step={0.1}
+                   value={bw}
+                   onChange={e => {
+                     const v = parseFloat(e.target.value);
+                     if (!isNaN(v) && v >= 0.1 && v <= 5.0) pushParam(bwKey, v);
+                   }}
+                   className={'input w-full val-mono ' + (bw > 5.0 ? 'ring-1 ring-warn rounded' : '')} />
+          </div>
+        )}
         <div>
           <div className="label mb-1">μs/°</div>
           <div className="input val-mono text-center">{perDeg.toFixed(2)}</div>
@@ -260,33 +263,40 @@ export function TiltPanel({ t }: Props) {
       </div>
 
       {/* 预览滑杆 (主显 abs, 括号显示偏移量). 实际机械轴 0-135°, 全局开关在 Tilts 顶部. */}
-      <div className="mt-3">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="label">预览角度</span>
-          {ovrActive && globalPreviewMode && <span className="text-[9px] text-accent flex items-center gap-1">
-            <Radio size={9} className="animate-pulse"/>LIVE</span>}
-          {!globalPreviewMode && <span className="text-[9px] text-fg-dim">全局预览关</span>}
-          {armedLock && <span className="text-[9px] text-warn">已 armed · 锁定</span>}
-          {offsetClipped && <span className="text-[9px] text-warn">⚠ 撞软限</span>}
-          <span className="val-mono ml-auto">
-            {clampedAbs}°
-            <span className="text-fg-dim text-[10px] ml-1">
-              ({clampedOffset >= 0 ? '+' : ''}{clampedOffset}°)
+      {/* P7.9.28: no_atc_fb (TL2/TR2) 跳预览 — 没注册 TLT_*_PRV. 直接拖 GOAL 滑块, main.lua 1Hz tick 写 PWM */}
+      {t.no_atc_fb ? (
+        <div className="mt-3 text-[10px] text-fg-dim">
+          ⓘ 此 servo 不参与 orchestrator. 拖上面 GOAL 滑块 → main.lua 1Hz 写 PWM (经 ZERO+DIR×PER_DEG 公式).
+        </div>
+      ) : (
+        <div className="mt-3">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="label">预览角度</span>
+            {ovrActive && globalPreviewMode && <span className="text-[9px] text-accent flex items-center gap-1">
+              <Radio size={9} className="animate-pulse"/>LIVE</span>}
+            {!globalPreviewMode && <span className="text-[9px] text-fg-dim">全局预览关</span>}
+            {armedLock && <span className="text-[9px] text-warn">已 armed · 锁定</span>}
+            {offsetClipped && <span className="text-[9px] text-warn">⚠ 撞软限</span>}
+            <span className="val-mono ml-auto">
+              {clampedAbs}°
+              <span className="text-fg-dim text-[10px] ml-1">
+                ({clampedOffset >= 0 ? '+' : ''}{clampedOffset}°)
+              </span>
             </span>
-          </span>
+          </div>
+          <input type="range" min={0} max={135} step={1}
+                 value={previewAbs}
+                 disabled={armedLock || !globalPreviewMode}
+                 onChange={e => setPreviewLive(parseInt(e.target.value))}
+                 className="slider w-full" />
+          <div className="flex justify-between text-[9px] text-fg-dim mt-0.5">
+            <span>0° 垂直</span>
+            <span>45° 中立</span>
+            <span>90° 水平</span>
+            <span>135°</span>
+          </div>
         </div>
-        <input type="range" min={0} max={135} step={1}
-               value={previewAbs}
-               disabled={armedLock || !globalPreviewMode}
-               onChange={e => setPreviewLive(parseInt(e.target.value))}
-               className="slider w-full" />
-        <div className="flex justify-between text-[9px] text-fg-dim mt-0.5">
-          <span>0° 垂直</span>
-          <span>45° 中立</span>
-          <span>90° 水平</span>
-          <span>135°</span>
-        </div>
-      </div>
+      )}
 
       {/* 输出 PWM (真实物理值, 撞软限锁限位 PWM) */}
       <div className={

@@ -8,8 +8,10 @@ import { dynamicGeometry, type MotorId } from '../../lib/geometry';
 import { gcs, GcsMessage } from '../../lib/gcs';
 
 // TiltId → alias (PRE_OVR_<alias>)
+// P7.9.28: TL2/TR2 加入 (锁 90°, 不接 orchestrator)
 const TILT_ALIAS_MAP: Record<TiltId, TiltAlias> = {
   DFL:'DFL', DFR:'DFR', TL1:'TL1', TR1:'TR1', RDL:'RDL', RDR:'RDR', S_GROUP_TILT:'SGRP',
+  TL2:'TL2', TR2:'TR2',
 };
 
 // motor → 控制其 tilt 的 servo id

@@ -40,6 +40,9 @@ export const TILTS: TiltConfig[] = [
   // RD 后斜下吹: 单向 (15..45°, 中立 → 满下吹)
   { id:'RDL',          alias:'RDL',  range:[15, 45], servo_ch:17, is_group:false },
   { id:'RDR',          alias:'RDR',  range:[15, 45], servo_ch:18, is_group:false },
+  // P7.9.28: TL2/TR2 — 硬件已装 (SERVO20/21), 不接 orchestrator (锁 GOAL=90°). 5 参数 (跳 PRV/BW)
+  { id:'TL2',          alias:'TL2',  range:[ 0, 90], servo_ch:20, is_group:false, no_atc_fb:true },
+  { id:'TR2',          alias:'TR2',  range:[ 0, 90], servo_ch:21, is_group:false, no_atc_fb:true },
 ];
 
 export const TILT_NEUTRAL_ABS_DEG = 45.0;
@@ -49,12 +52,13 @@ export const TILT_IDS: TiltId[] = TILTS.map(t => t.id);
 export const PHASES: PhaseName[] = ['STATIONARY', 'TAXI', 'CUSHION', 'GROUND_EFFECT', 'EMERGENCY'];
 
 // 阶段默认 tilt 角度 (abs_deg, 45° = 中立). 与 phases.lua PHASE_CONFIG 对齐.
+// P7.9.28: TL2/TR2 锁 90° (硬件已装, 不参与 orchestrator)
 export const DEFAULT_PHASE_CONFIG: Record<PhaseName, PhaseConfig> = {
-  STATIONARY:    { trim: 5,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 } },
-  TAXI:          { trim: 5,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:15, RDR:15, S_GROUP_TILT:90 } },
-  CUSHION:       { trim: 9,  tilts: { DFL:55, DFR:55, TL1:45, TR1:45, RDL:30, RDR:30, S_GROUP_TILT:60 } },
-  GROUND_EFFECT: { trim: 11, tilts: { DFL:50, DFR:50, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 } },
-  EMERGENCY:     { trim: 0,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 } },
+  STATIONARY:    { trim: 5,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45, TL2:90, TR2:90 } },
+  TAXI:          { trim: 5,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:15, RDR:15, S_GROUP_TILT:90, TL2:90, TR2:90 } },
+  CUSHION:       { trim: 9,  tilts: { DFL:55, DFR:55, TL1:45, TR1:45, RDL:30, RDR:30, S_GROUP_TILT:60, TL2:90, TR2:90 } },
+  GROUND_EFFECT: { trim: 11, tilts: { DFL:50, DFR:50, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45, TL2:90, TR2:90 } },
+  EMERGENCY:     { trim: 0,  tilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45, TL2:90, TR2:90 } },
 };
 
 export const GROUP_COLORS: Record<string, string> = {

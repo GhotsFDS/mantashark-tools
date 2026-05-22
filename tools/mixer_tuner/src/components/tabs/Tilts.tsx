@@ -16,12 +16,14 @@ export function Tilts() {
   };
 
   // 全局预览开/关. 关闭时: 7 路 TLT_*_PRV=-1, 滑块回各路 G1 默认 (下水初始位).
+  // P7.9.28: TL2/TR2 跳过 (no_atc_fb, 没注册 TLT_*_PRV).
   // 用 gcs.pushParams 30ms 错峰, 防 mavbridge 拥塞.
   const togglePreview = (on: boolean) => {
     setGlobalPreviewMode(on);
     if (!on) {
       const batch: Record<string, number> = {};
       for (const t of TILTS) {
+        if (t.no_atc_fb) continue;   // TL2/TR2 没 PRV
         const ovrKey = `TLT_${t.alias}_PRV`;
         const g1Key  = `TLT_${t.alias}_G1`;
         // 优先用 store 实测值, 否则用 DEFAULT_PARAMS (各路 G1 默认不一致, 不能写死 45)

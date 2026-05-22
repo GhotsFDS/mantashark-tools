@@ -399,7 +399,7 @@ export function Gcs() {
       <div className="card col-span-6 py-2">
         <div className="card-title text-[11px] mb-1.5 flex items-center gap-1.5">
           <span>SERVO 输出 (按功能)</span>
-          <span className="text-[9px] text-fg-dim font-normal">12 EDF + 7 倾转舵</span>
+          <span className="text-[9px] text-fg-dim font-normal">12 EDF + 9 倾转舵</span>
           {!tlm.servo && <span className="text-[9px] text-fg-dim font-normal">(无)</span>}
         </div>
         <div className="grid grid-cols-3 gap-x-3 gap-y-1">
@@ -424,6 +424,8 @@ export function Gcs() {
             [16, 'RDL 倾',  'T'],
             [17, 'RDR 倾',  'T'],
             [18, 'S 组 倾', 'T'],
+            [19, 'TL2 倾',  'T'],
+            [20, 'TR2 倾',  'T'],
           ] as const).map(([idx, name, group]) => {
             const v = tlm.servo?.[idx] ?? 0;
             // 电机 (M) 800-2200, 倾转舵 (T) 500-2500

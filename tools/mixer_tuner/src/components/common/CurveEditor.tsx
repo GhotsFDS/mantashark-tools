@@ -29,7 +29,7 @@ interface Props {
 const VBAR_H = 44;
 const PADDING = { top: VBAR_H + 10, right: 50, bottom: 28, left: 40 };
 
-// 7 路 tilt 颜色
+// 9 路 tilt 颜色 (P7.9.28: 加 TL2/TR2)
 const TILT_COLORS: Record<TiltAlias, string> = {
   SGRP: '#58b4ff',
   DFL:  '#ffa657',
@@ -38,6 +38,8 @@ const TILT_COLORS: Record<TiltAlias, string> = {
   TR1:  '#56d364',
   RDL:  '#ff7b72',
   RDR:  '#f85149',
+  TL2:  '#a371f7',
+  TR2:  '#bc8cff',
 };
 
 const TILT_LABELS: Record<TiltAlias, string> = {
@@ -48,9 +50,11 @@ const TILT_LABELS: Record<TiltAlias, string> = {
   TR1: 'T 右 1',
   RDL: 'RD 左',
   RDR: 'RD 右',
+  TL2: 'T 左 2',
+  TR2: 'T 右 2',
 };
 
-const TILT_ALIASES: TiltAlias[] = ['SGRP', 'DFL', 'DFR', 'TL1', 'TR1', 'RDL', 'RDR'];
+const TILT_ALIASES: TiltAlias[] = ['SGRP', 'DFL', 'DFR', 'TL1', 'TR1', 'RDL', 'RDR', 'TL2', 'TR2'];
 const K_KEYS: GroupKey[] = ['KS', 'KDF', 'KT', 'KRD'];
 
 type Drag =

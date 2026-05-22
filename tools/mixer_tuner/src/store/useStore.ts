@@ -42,13 +42,13 @@ const INITIAL: AppState = {
   curveMode: 'k',
   mergeLR: true,                                   // 默认合并左右
   currentTab: 'gcs',
-  // 默认全 45° (绝对物理角度 = 中立)
-  tiltPreview: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 },
+  // 默认全 45° (绝对物理角度 = 中立). P7.9.28: TL2/TR2 锁 90° (硬件已装, 未校准前 PWM=ZERO)
+  tiltPreview: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45, TL2:90, TR2:90 },
   globalPreviewMode: false,                              // 默认关 (下水初始状态, 全部 G1 默认位)
   analysisRdTilt: 45,
   analysisSGroup: 45,
   analysisDfTarget: 55,                                  // 中立稍偏水平
-  analysisTilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45 },
+  analysisTilts: { DFL:45, DFR:45, TL1:45, TR1:45, RDL:45, RDR:45, S_GROUP_TILT:45, TL2:90, TR2:90 },
 };
 
 export const useStore = create<AppState & Actions>()(
@@ -100,7 +100,7 @@ export const useStore = create<AppState & Actions>()(
     {
       name: 'mantashark-tuner-v9',
       // Bumping version: 旧的 persisted state 会被 migrate() 处理. 改 schema 时 +1 强制清旧坏数据.
-      version: 8,
+      version: 9,
       migrate: (persisted: any, version: number) => {
         // v3 之前: selectedCurve 可能存了非法值导致崩溃 → 重置 UI 状态.
         // v4: simulateArmed 默认值改 false (旧的 true 会卡住调参 UI 显示"已 armed").
@@ -152,13 +152,32 @@ export const useStore = create<AppState & Actions>()(
             persisted.params = cleaned;
           }
         }
+        if (!persisted || version < 9) {
+          // v9: P7.9.28 加 TL2/TR2 tilt servo (TLT_TL2_*/TR2_* params + tiltPreview/analysisTilts 加 keys)
+          if (persisted.params) {
+            const cleaned: Record<string, number> = {};
+            for (const k of Object.keys(DEFAULT_PARAMS)) {
+              cleaned[k] = (k in persisted.params) ? persisted.params[k] : DEFAULT_PARAMS[k];
+            }
+            persisted.params = cleaned;
+          }
+          // 补 TL2/TR2 到 tiltPreview / analysisTilts (旧 store 没这俩 keys)
+          if (persisted.tiltPreview) {
+            if (persisted.tiltPreview.TL2 == null) persisted.tiltPreview.TL2 = 90;
+            if (persisted.tiltPreview.TR2 == null) persisted.tiltPreview.TR2 = 90;
+          }
+          if (persisted.analysisTilts) {
+            if (persisted.analysisTilts.TL2 == null) persisted.analysisTilts.TL2 = 90;
+            if (persisted.analysisTilts.TR2 == null) persisted.analysisTilts.TR2 = 90;
+          }
+        }
         return persisted;
       },
       // 校验阀: 加载时检查关键枚举字段, 任一非法直接重置该字段, 不让坏值传到 React.
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         const K_KEYS = ['KS','KDF','KT','KRD'];
-        const TILT_ALIASES_OK = ['SGRP','DFL','DFR','TL1','TR1','RDL','RDR'];
+        const TILT_ALIASES_OK = ['SGRP','DFL','DFR','TL1','TR1','RDL','RDR','TL2','TR2'];
         const MODES_OK = ['k','tilt','joint'];
         const TABS_OK = ['gcs','auto','profile','tilts','geometry','force','preflight','params','rtk','loganalysis'];
         const PHASES_OK = ['STATIONARY','TAXI','CUSHION','GROUND_EFFECT','EMERGENCY'];

@@ -1,6 +1,6 @@
 export type GroupKey = 'KS' | 'KDF' | 'KT' | 'KRD';
-export type TiltId = 'DFL' | 'DFR' | 'TL1' | 'TR1' | 'RDL' | 'RDR' | 'S_GROUP_TILT';
-export type TiltAlias = 'DFL' | 'DFR' | 'TL1' | 'TR1' | 'RDL' | 'RDR' | 'SGRP';
+export type TiltId = 'DFL' | 'DFR' | 'TL1' | 'TR1' | 'RDL' | 'RDR' | 'S_GROUP_TILT' | 'TL2' | 'TR2';
+export type TiltAlias = 'DFL' | 'DFR' | 'TL1' | 'TR1' | 'RDL' | 'RDR' | 'SGRP' | 'TL2' | 'TR2';
 export type PhaseName = 'STATIONARY' | 'TAXI' | 'CUSHION' | 'GROUND_EFFECT' | 'EMERGENCY';
 
 export interface MotorEntry {
@@ -21,6 +21,7 @@ export interface TiltConfig {
   range: [number, number];
   servo_ch: number;
   is_group: boolean;
+  no_atc_fb?: boolean;   // P7.9.28: TL2/TR2 不接 orchestrator ATC fb, 跳过 BW/PRV 渲染
 }
 
 export interface PhaseConfig {
