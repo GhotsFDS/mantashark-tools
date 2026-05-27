@@ -524,14 +524,18 @@ class BenchApp:
         ttk.Button(f4, text='保存', command=lambda n=nm: self.cal_save_row(n),
                    style='Accent.TButton').pack(side='right')
 
-        # 输出 PWM 显示
+        # 输出 PWM 显示 (左: GUI 算的, 右: FC 实测 SERVO_OUTPUT_RAW)
         f5 = ttk.Frame(card, style='Card.TFrame')
         f5.pack(fill='x', pady=(8, 0))
-        ttk.Label(f5, text='输出 PWM:', style='Card.TLabel'
-                  ).pack(side='left')
+        ttk.Label(f5, text='GUI 算:', style='Card.TLabel').pack(side='left')
         lbl_pwm = ttk.Label(f5, text='—', style='PWM.TLabel')
-        lbl_pwm.pack(side='right')
+        lbl_pwm.pack(side='left', padx=(4, 12))
+        ttk.Label(f5, text='│ FC 实测:', style='Card.TLabel').pack(side='left')
+        lbl_pwm_actual = ttk.Label(f5, text='—', style='PWM.TLabel',
+                                    foreground=self.theme['accent'])
+        lbl_pwm_actual.pack(side='left', padx=4)
         widgets['lbl_pwm'] = lbl_pwm
+        widgets['lbl_pwm_actual'] = lbl_pwm_actual
 
         self._cal_widgets[nm] = widgets
         # 初次更新 PWM
@@ -1166,6 +1170,11 @@ class BenchApp:
                     t_line = '  '.join(f'T{ch:02d}={servo.pwm[ch-1]:>4}' for _, ch, _ in TILT_LIST)
                     self.lbl_pwm_motors.config(text=f'电机 (CH1-12): {m_line}')
                     self.lbl_pwm_tilts.config(text=f'倾转 (CH13-21): {t_line}')
+                    # 同步刷 cal 卡片的 "FC 实测 PWM"
+                    for nm, ch, _ in TILT_LIST:
+                        w = self._cal_widgets.get(nm)
+                        if w and 'lbl_pwm_actual' in w:
+                            w['lbl_pwm_actual'].config(text=f'{servo.pwm[ch-1]} μs')
                 for _, sev, txt in self.fc.drain_statustext():
                     # 全部 STATUSTEXT 显示 (除 PreArm 噪音重复 / STT 心跳)
                     if 'STT:' in txt: continue
