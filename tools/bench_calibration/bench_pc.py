@@ -1053,8 +1053,7 @@ class BenchApp:
                     servo = self.fc.latest_servo()
                     if servo and servo.pwm:
                         pwm_1_16 = list(servo.pwm[:16])
-                # port=1 (ch17-32) pwm 来自 fc latest_servo_port1
-                # 暂没 wire 起来, 留 17-21 是 0 (TODO: fc_mavlink 增 port=1 cache)
+                        pwm_17_21 = list(servo.pwm[16:21])
                 self.recorder.write_task(
                     t_pc=time.time() - t0,
                     sensor=sensor_vals,
@@ -1157,10 +1156,11 @@ class BenchApp:
             try:
                 servo = self.fc.latest_servo()
                 if servo:
+                    # pwm[0..15]=ch1-16, pwm[16..31]=ch17-32
                     m_line = '  '.join(f'M{i+1:02d}={servo.pwm[i]:>4}' for i in range(12))
                     t_line = '  '.join(f'T{ch:02d}={servo.pwm[ch-1]:>4}' for _, ch, _ in TILT_LIST)
-                    self.lbl_pwm_motors.config(text=f'电机: {m_line}')
-                    self.lbl_pwm_tilts.config(text=f'倾转: {t_line}')
+                    self.lbl_pwm_motors.config(text=f'电机 (CH1-12): {m_line}')
+                    self.lbl_pwm_tilts.config(text=f'倾转 (CH13-21): {t_line}')
                 for _, sev, txt in self.fc.drain_statustext():
                     # 全部 STATUSTEXT 显示 (除 PreArm 噪音重复 / STT 心跳)
                     if 'STT:' in txt: continue

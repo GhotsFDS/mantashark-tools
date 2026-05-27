@@ -22,7 +22,8 @@ from pymavlink import mavutil
 @dataclass
 class ServoState:
     t_pc: float
-    pwm: list[int] = field(default_factory=lambda: [0] * 16)   # channels 1..16
+    pwm: list[int] = field(default_factory=lambda: [0] * 32)   # channels 1..32
+    # pwm[0..15] = ch1-16 (port=0), pwm[16..31] = ch17-32 (port=1)
 
 
 class FCMavlink:
@@ -91,14 +92,20 @@ class FCMavlink:
                 with self._lock:
                     self._statustext_buf.append((time.time(), int(msg.severity), txt))
             elif t == 'SERVO_OUTPUT_RAW':
-                # 16 channels in servoX_raw fields
-                state = ServoState(t_pc=time.time())
-                for i in range(1, 17):
-                    fld = f'servo{i}_raw'
-                    if hasattr(msg, fld):
-                        state.pwm[i - 1] = getattr(msg, fld)
+                # port 字段决定通道 base offset: port=0 → ch1-16, port=1 → ch17-32
+                port = getattr(msg, 'port', 0)
+                base = port * 16
                 with self._lock:
-                    self._servo_latest = state
+                    if self._servo_latest is None:
+                        self._servo_latest = ServoState(t_pc=time.time())
+                    # 单次消息含 16 个 slot, 写入 [base..base+15]
+                    for i in range(1, 17):
+                        fld = f'servo{i}_raw'
+                        if hasattr(msg, fld):
+                            idx = base + i - 1
+                            if 0 <= idx < 32:
+                                self._servo_latest.pwm[idx] = getattr(msg, fld)
+                    self._servo_latest.t_pc = time.time()
             elif t == 'PARAM_VALUE':
                 with self._lock:
                     self._param_cache[msg.param_id] = msg.param_value
