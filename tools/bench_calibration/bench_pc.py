@@ -240,6 +240,8 @@ class BenchApp:
         # 串口 var
         self.var_fc_port     = tk.StringVar()
         self.var_sensor_port = tk.StringVar()
+        self.var_fc_baud     = tk.IntVar(value=115200)
+        self.var_sensor_baud = tk.IntVar(value=9600)
         self._port_map = {}
 
         # 校准 var
@@ -272,6 +274,15 @@ class BenchApp:
         self.live_preview = tk.IntVar(value=0)
         self._last_push_ms = {}   # 滑杆节流 per-tilt
 
+        # 任务录制 (push_task 后启, BENCH DONE 后停)
+        self._recording = False
+        self._record_thread = None
+        self._stop_record = threading.Event()
+        self._cur_phase = 'IDLE'
+        self._cur_ang_idx = 0
+        self._cur_ang_deg = 0.0
+        self._cur_thr = 0.0
+
         self._build_ui()
         self._refresh_ports()
         signal.signal(signal.SIGINT, lambda *a: self.emergency_stop())
@@ -302,9 +313,18 @@ class BenchApp:
         self._build_task_tab(tab_task.inner)
         self._build_live_tab(tab_live.inner)
 
+        # 底部常驻 传感器实时栏 (任何 tab 都可见)
+        bottom_sensor = ttk.LabelFrame(self._root, text='  传感器实时 (3 通道 Z 向力)  ',
+                                       padding=(15, 6))
+        bottom_sensor.pack(fill='x', side='bottom', padx=20, pady=(0, 5))
+        self.lbl_bot_sensor = ttk.Label(bottom_sensor, text='— 未连接 —',
+            style='Mono.TLabel',
+            font=(self.theme['mono'][0], 14, 'bold'))
+        self.lbl_bot_sensor.pack(anchor='w')
+
         # 底部状态栏
         statusbar = ttk.Frame(self._root)
-        statusbar.pack(fill='x', side='bottom', padx=20, pady=(0, 10))
+        statusbar.pack(fill='x', side='bottom', padx=20, pady=(0, 8))
         self.lbl_status = ttk.Label(statusbar, text='就绪', style='Subtle.TLabel')
         self.lbl_status.pack(side='left')
 
@@ -315,45 +335,60 @@ class BenchApp:
                              padding=(15, 10))
         bar.pack(fill='x', padx=20, pady=5)
 
+        FC_BAUDS     = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
+        SENSOR_BAUDS = [4800, 9600, 19200, 38400, 57600, 115200]
+
         # ── 飞控行 ──
         ttk.Label(bar, text='飞控串口:', style='Card.TLabel').grid(
             row=0, column=0, sticky='w', padx=(0, 8), pady=4)
         self.cb_fc = ttk.Combobox(bar, textvariable=self.var_fc_port,
-                                  width=42, state='readonly')
+                                  width=38, state='readonly')
         self.cb_fc.grid(row=0, column=1, sticky='ew', pady=4)
+        ttk.Label(bar, text='波特:', style='Card.TLabel').grid(
+            row=0, column=2, sticky='e', padx=(8, 4))
+        self.cb_fc_baud = ttk.Combobox(bar, textvariable=self.var_fc_baud,
+                                       width=8, state='readonly',
+                                       values=[str(b) for b in FC_BAUDS])
+        self.cb_fc_baud.grid(row=0, column=3, pady=4)
         self.lbl_fc_dot = ttk.Label(bar, text='●', style='Card.TLabel',
                                     foreground=self.theme['danger'])
-        self.lbl_fc_dot.grid(row=0, column=2, padx=(10, 4))
+        self.lbl_fc_dot.grid(row=0, column=4, padx=(10, 4))
         self.btn_fc_connect = ttk.Button(bar, text='连接飞控',
                                          command=self.on_connect_fc,
                                          style='Primary.TButton')
-        self.btn_fc_connect.grid(row=0, column=3, padx=4, pady=4)
+        self.btn_fc_connect.grid(row=0, column=5, padx=4, pady=4)
         self.btn_fc_disconnect = ttk.Button(bar, text='断开',
                                            command=self.on_disconnect_fc,
                                            state='disabled')
-        self.btn_fc_disconnect.grid(row=0, column=4, padx=4, pady=4)
+        self.btn_fc_disconnect.grid(row=0, column=6, padx=4, pady=4)
 
         # ── 传感器行 ──
         ttk.Label(bar, text='传感器串口:', style='Card.TLabel').grid(
             row=1, column=0, sticky='w', padx=(0, 8), pady=4)
         self.cb_sensor = ttk.Combobox(bar, textvariable=self.var_sensor_port,
-                                      width=42, state='readonly')
+                                      width=38, state='readonly')
         self.cb_sensor.grid(row=1, column=1, sticky='ew', pady=4)
+        ttk.Label(bar, text='波特:', style='Card.TLabel').grid(
+            row=1, column=2, sticky='e', padx=(8, 4))
+        self.cb_sensor_baud = ttk.Combobox(bar, textvariable=self.var_sensor_baud,
+                                           width=8, state='readonly',
+                                           values=[str(b) for b in SENSOR_BAUDS])
+        self.cb_sensor_baud.grid(row=1, column=3, pady=4)
         self.lbl_sensor_dot = ttk.Label(bar, text='●', style='Card.TLabel',
                                         foreground=self.theme['danger'])
-        self.lbl_sensor_dot.grid(row=1, column=2, padx=(10, 4))
+        self.lbl_sensor_dot.grid(row=1, column=4, padx=(10, 4))
         self.btn_sensor_connect = ttk.Button(bar, text='连接传感器',
                                             command=self.on_connect_sensor,
                                             style='Primary.TButton')
-        self.btn_sensor_connect.grid(row=1, column=3, padx=4, pady=4)
+        self.btn_sensor_connect.grid(row=1, column=5, padx=4, pady=4)
         self.btn_sensor_disconnect = ttk.Button(bar, text='断开',
                                                 command=self.on_disconnect_sensor,
                                                 state='disabled')
-        self.btn_sensor_disconnect.grid(row=1, column=4, padx=4, pady=4)
+        self.btn_sensor_disconnect.grid(row=1, column=6, padx=4, pady=4)
 
         # ── 全局按钮 ──
         glob = ttk.Frame(bar, style='Card.TFrame')
-        glob.grid(row=0, column=5, rowspan=2, padx=(20, 0), sticky='ns')
+        glob.grid(row=0, column=7, rowspan=2, padx=(20, 0), sticky='ns')
         self.btn_refresh = ttk.Button(glob, text='↻ 刷新串口',
                                       command=self._refresh_ports)
         self.btn_refresh.pack(side='top', padx=2, pady=2, fill='x')
@@ -709,13 +744,14 @@ class BenchApp:
             messagebox.showerror('串口冲突', '飞控和传感器选了同一串口, 且传感器已占用')
             return
 
-        self.set_status(f'正在连接飞控 {fc_dev}...', 'subtle')
-        self.fc = FCMavlink(fc_dev)
+        baud = int(self.var_fc_baud.get())
+        self.set_status(f'正在连接飞控 {fc_dev} @ {baud}...', 'subtle')
+        self.fc = FCMavlink(fc_dev, baud=baud)
         try:
             self.fc.connect(timeout=15)
         except Exception as e:
             self.fc = None
-            messagebox.showerror('飞控连接失败', f'端口 {fc_dev}\n\n{e}')
+            messagebox.showerror('飞控连接失败', f'端口 {fc_dev} @ {baud}\n\n{e}')
             self.set_status('飞控连接失败', 'danger')
             self.lbl_fc_dot.config(foreground=self.theme['danger'])
             return
@@ -753,8 +789,9 @@ class BenchApp:
             messagebox.showerror('串口冲突', '传感器和飞控选了同一串口, 且飞控已占用')
             return
 
-        self.set_status(f'正在连接传感器 {sn_dev}...', 'subtle')
-        self.sensor = TransducerAscii(sn_dev, channels=[1, 2, 3])
+        baud = int(self.var_sensor_baud.get())
+        self.set_status(f'正在连接传感器 {sn_dev} @ {baud}...', 'subtle')
+        self.sensor = TransducerAscii(sn_dev, baud=baud, channels=[1, 2, 3])
         try:
             self.sensor.open()
             hs = self.sensor.handshake()
@@ -966,6 +1003,106 @@ class BenchApp:
                     f'{"成功" if ok else "部分失败"}')
         self.set_status('任务已下发 · 等 RC 解锁 或 软触发', 'success')
 
+        # 启录制 (即使没 sensor, fc 端 PWM 也照样录)
+        if ok:
+            extra_config = {
+                '起始油门 (THR_START)': f'{t["thr_start"].get():.2f}',
+                '终点油门 (THR_MAX)':   f'{t["thr_max"].get():.2f}',
+                '步进 (THR_STEP)':      f'{t["thr_step"].get():.2f}',
+                '每档保持 (HOLD)':      f'{t["hold_ms"].get()} ms',
+                '启动 ramp (RAMP_MS)':  f'{t["ramp_ms"].get()} ms',
+                '电机 mask (bit)':      f'{m_mask}',
+                '倾转 mask (bit)':      f'{t_mask}',
+                '电机详单':              ','.join(f'M{m}' for m in range(1,13) if m_mask & (1 << (m-1))),
+                '倾转详单':              ','.join(nm for i,(nm,_,_) in enumerate(TILT_LIST) if t_mask & (1<<i)) or 'none',
+                '角度数 (ANG_N)':       f'{n_ang}',
+                '角度列表':              ang_str,
+                'S→DF 解耦 EN':         f'{self.cpl_en.get()}',
+                'S→DF 解耦 K':          f'{self.cpl_k.get():.2f}',
+            }
+            self._start_recording(motors_str='-'.join(ms),
+                                  tilts_str='-'.join(ts) or 'none',
+                                  angles_str=ang_str.replace(',', '-'),
+                                  thr_range=f'{int(t["thr_start"].get()*100)}-{int(t["thr_max"].get()*100)}',
+                                  config=extra_config)
+
+    def _start_recording(self, motors_str, tilts_str, angles_str, thr_range, config=None):
+        if self._recording:
+            return
+        try:
+            path = self.recorder.start_task(motors_str, tilts_str, angles_str, thr_range,
+                                            config=config)
+        except Exception as e:
+            self.log_st(f'[录制] 启动失败: {e}')
+            return
+        self._recording = True
+        self._stop_record.clear()
+        self._record_thread = threading.Thread(target=self._record_loop, daemon=True)
+        self._record_thread.start()
+        self.log_st(f'[录制] 开始 → {os.path.basename(path)}')
+
+    def _record_loop(self):
+        """10Hz 抓 sensor + servo PWM, 写 CSV. 直到 _stop_record."""
+        t0 = time.time()
+        pwm_1_16 = [0] * 16
+        pwm_17_21 = [0] * 5
+        while not self._stop_record.is_set():
+            try:
+                sensor_vals = self.sensor.get_latest() if self.sensor else {}
+                if self.fc:
+                    servo = self.fc.latest_servo()
+                    if servo and servo.pwm:
+                        pwm_1_16 = list(servo.pwm[:16])
+                # port=1 (ch17-32) pwm 来自 fc latest_servo_port1
+                # 暂没 wire 起来, 留 17-21 是 0 (TODO: fc_mavlink 增 port=1 cache)
+                self.recorder.write_task(
+                    t_pc=time.time() - t0,
+                    sensor=sensor_vals,
+                    pwm_1_16=pwm_1_16, pwm_17_21=pwm_17_21,
+                    phase=self._cur_phase,
+                    ang_idx=self._cur_ang_idx,
+                    ang_deg=self._cur_ang_deg,
+                    thr_pct=self._cur_thr,
+                    fc_status='',
+                )
+            except Exception as e:
+                pass
+            time.sleep(0.1)
+
+    def _stop_recording(self):
+        if not self._recording:
+            return
+        self._stop_record.set()
+        if self._record_thread:
+            self._record_thread.join(timeout=2.0)
+        try:
+            path, n = self.recorder.end_point()
+            self.log_st(f'[录制] 结束 · {n} 行 → {os.path.basename(path)}')
+        except Exception as e:
+            self.log_st(f'[录制] 收尾错: {e}')
+        self._recording = False
+        self._cur_phase = 'IDLE'
+
+    def _parse_bench_status(self, txt):
+        """从 'BENCH ang[1/2]=30.0 thr=15%' 提 ang_idx / ang / thr."""
+        import re
+        m = re.search(r'ang\[(\d+)/\d+\]=(-?[\d.]+)\s+thr=(\d+)%', txt)
+        if m:
+            self._cur_ang_idx = int(m.group(1))
+            self._cur_ang_deg = float(m.group(2))
+            self._cur_thr = float(m.group(3))
+        if 'RAMP_UP' in txt: self._cur_phase = 'RAMP_UP'
+        elif 'HOLD' in txt:  self._cur_phase = 'HOLD'
+        elif 'RAMP_DOWN' in txt: self._cur_phase = 'RAMP_DOWN'
+        elif 'DONE' in txt:
+            self._cur_phase = 'DONE'
+            self._stop_recording()
+        elif 'ABORT' in txt:
+            self._cur_phase = 'ABORT'
+            self._stop_recording()
+        elif 'START' in txt:
+            self._cur_phase = 'START'
+
     def task_sw_trigger(self):
         if not self._need_fc(): return
         if not messagebox.askyesno('确认软触发',
@@ -1002,14 +1139,21 @@ class BenchApp:
         self.lbl_status.config(text=msg, style=m.get(style, 'Subtle.TLabel'))
 
     def _update_display(self):
-        if self._connected and self.sensor and self.fc:
+        # 传感器实时 (sensor 连了就更新, 跟 fc 状态无关; 显在底部条 + Live tab 大字)
+        if self.sensor is not None:
             try:
                 latest = self.sensor.get_latest()
-                self.lbl_sensor_vals.config(
-                    text=f'CH1 = {latest.get(1, "—"):>10}    '
-                         f'CH2 = {latest.get(2, "—"):>10}    '
-                         f'CH3 = {latest.get(3, "—"):>10}')
+                txt = (f'CH1 = {latest.get(1, "—"):>10}    '
+                       f'CH2 = {latest.get(2, "—"):>10}    '
+                       f'CH3 = {latest.get(3, "—"):>10}')
+                self.lbl_bot_sensor.config(text=txt)
+                if hasattr(self, 'lbl_sensor_vals'):
+                    self.lbl_sensor_vals.config(text=txt)
             except Exception: pass
+        else:
+            self.lbl_bot_sensor.config(text='— 传感器未连接 —')
+
+        if self._connected and self.fc:
             try:
                 servo = self.fc.latest_servo()
                 if servo:
@@ -1018,8 +1162,18 @@ class BenchApp:
                     self.lbl_pwm_motors.config(text=f'电机: {m_line}')
                     self.lbl_pwm_tilts.config(text=f'倾转: {t_line}')
                 for _, sev, txt in self.fc.drain_statustext():
-                    if 'BENCH' in txt or 'CAL' in txt or 'Arm' in txt or sev <= 4:
-                        self.log_st(f'飞控: {txt}')
+                    # 全部 STATUSTEXT 显示 (除 PreArm 噪音重复 / STT 心跳)
+                    if 'STT:' in txt: continue
+                    if 'PreArm' in txt and 'Waiting' in txt:
+                        # 把 Waiting for RC 这种重复消息只显 1 次 / 5s
+                        now = time.time()
+                        if now - getattr(self, '_last_prearm_log', 0) < 5:
+                            continue
+                        self._last_prearm_log = now
+                    sev_tag = {0:'急', 1:'警', 2:'关', 3:'错', 4:'告', 5:'注', 6:'信', 7:'调'}.get(sev, str(sev))
+                    self.log_st(f'飞控[{sev_tag}]: {txt}')
+                    if 'BENCH' in txt:
+                        self._parse_bench_status(txt)
             except Exception: pass
         self._root.after(200, self._update_display)
 
