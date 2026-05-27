@@ -267,6 +267,7 @@ class BenchApp:
             'thr_step': tk.DoubleVar(value=0.10),
             'hold_ms':  tk.IntVar(value=2000),
             'ramp_ms':  tk.IntVar(value=500),       # 0 → START 快速 ramp
+            'ramp_dn':  tk.IntVar(value=1000),      # 结束缓降 MAX → 0 时长
             'fix_ang':  tk.DoubleVar(value=45.0),
         }
 
@@ -634,6 +635,7 @@ class BenchApp:
             ('步进 STEP:',    self.task['thr_step'], {'from_':0.05,'to':0.5, 'increment':0.05, 'format':'%.2f'}),
             ('每档 HOLD (ms):',self.task['hold_ms'], {'from_':500, 'to':10000, 'increment':500}),
             ('启动 RAMP (ms):',self.task['ramp_ms'], {'from_':0,   'to':5000,  'increment':100}),
+            ('结束缓降 (ms):', self.task['ramp_dn'], {'from_':0,   'to':10000, 'increment':100}),
         ]:
             ttk.Label(rt, text=label, style='Card.TLabel'
                       ).pack(side='left', padx=(0, 4))
@@ -988,6 +990,7 @@ class BenchApp:
             ('MSAK_THR_STEP',  t['thr_step'].get()),
             ('MSAK_HOLD_MS',   t['hold_ms'].get()),
             ('MSAK_RAMP_MS',   t['ramp_ms'].get()),
+            ('MSAK_RAMP_DN',   t['ramp_dn'].get()),
             ('MSAK_TILT_FIX',  t['fix_ang'].get()),
         ]
         for i in range(8):
@@ -1011,6 +1014,7 @@ class BenchApp:
                 '步进 (THR_STEP)':      f'{t["thr_step"].get():.2f}',
                 '每档保持 (HOLD)':      f'{t["hold_ms"].get()} ms',
                 '启动 ramp (RAMP_MS)':  f'{t["ramp_ms"].get()} ms',
+                '结束缓降 (RAMP_DN)':   f'{t["ramp_dn"].get()} ms',
                 '电机 mask (bit)':      f'{m_mask}',
                 '倾转 mask (bit)':      f'{t_mask}',
                 '电机详单':              ','.join(f'M{m}' for m in range(1,13) if m_mask & (1 << (m-1))),
