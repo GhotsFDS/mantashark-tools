@@ -1,0 +1,6 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+bench_pc.spec

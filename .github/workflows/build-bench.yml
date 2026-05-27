@@ -1,0 +1,130 @@
+name: Build Bench Calibration EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/bench_calibration/**'
+      - '.github/workflows/build-bench.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller
+
+      - name: Build bench_pc.exe
+        run: |
+          cd tools/bench_calibration
+          pyinstaller --onefile `
+            --name bench_pc `
+            --windowed `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.dialects.v20.common `
+            --hidden-import serial `
+            --hidden-import tkinter `
+            --collect-submodules pymavlink `
+            --add-data "transducer_ascii.py;." `
+            --add-data "fc_mavlink.py;." `
+            --add-data "recorder.py;." `
+            --noconfirm `
+            bench_pc.py
+
+      - name: Verify build
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          cd tools/bench_calibration
+          dir dist
+          if (Test-Path "dist\bench_pc.exe") {
+            $size = (Get-Item "dist\bench_pc.exe").Length / 1MB
+            Write-Host ("OK bench_pc.exe: {0:N1} MB" -f $size)
+          } else {
+            throw "bench_pc.exe not found"
+          }
+
+      - name: Upload bench_pc artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench_pc-windows
+          path: tools/bench_calibration/dist/bench_pc.exe
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/bench_calibration/dist/bench_pc.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller
+
+      - name: Build bench_pc (Linux)
+        run: |
+          cd tools/bench_calibration
+          pyinstaller --onefile \
+            --name bench_pc \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.dialects.v20.common \
+            --hidden-import serial \
+            --hidden-import tkinter \
+            --collect-submodules pymavlink \
+            --add-data "transducer_ascii.py:." \
+            --add-data "fc_mavlink.py:." \
+            --add-data "recorder.py:." \
+            --noconfirm \
+            bench_pc.py
+
+      - name: Verify build
+        run: |
+          cd tools/bench_calibration
+          ls -la dist/
+          test -f dist/bench_pc && echo "OK Linux bench_pc built"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench_pc-linux
+          path: tools/bench_calibration/dist/bench_pc
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/bench_calibration/dist/bench_pc
