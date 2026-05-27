@@ -268,7 +268,6 @@ class BenchApp:
             'hold_ms':  tk.IntVar(value=2000),
             'ramp_ms':  tk.IntVar(value=500),       # 0 → START 快速 ramp
             'ramp_dn':  tk.IntVar(value=1000),      # 结束缓降 MAX → 0 时长
-            'fix_ang':  tk.DoubleVar(value=45.0),
         }
 
         # 实时预览模式 (cal tab live PWM 推飞控)
@@ -601,11 +600,9 @@ class BenchApp:
                             style='Card.TCheckbutton'
                             ).grid(row=r, column=c, padx=10, pady=4, sticky='w')
 
-        ttk.Label(ct, text='未选中的 tilt 持固定角度 (°):', style='Card.TLabel'
-                  ).pack(side='left', padx=(0, 8), pady=(8, 0))
-        ttk.Spinbox(ct, from_=-30, to=120, increment=5,
-                    textvariable=self.task['fix_ang'], width=10
-                    ).pack(side='left', pady=(8, 0))
+        ttk.Label(ct, justify='left', style='CardSubtle.TLabel',
+                  text='未选中的 tilt 自动保持物理默认 (S/DF=45° KT/KRD=90°), 无需配置.'
+                  ).pack(anchor='w', pady=(8, 0))
 
         # 角度列表
         ca = ttk.LabelFrame(parent, text='  ③ 扫描角度列表 (1-8 个角度)  ', padding=12)
@@ -991,7 +988,7 @@ class BenchApp:
             ('MSAK_HOLD_MS',   t['hold_ms'].get()),
             ('MSAK_RAMP_MS',   t['ramp_ms'].get()),
             ('MSAK_RAMP_DN',   t['ramp_dn'].get()),
-            ('MSAK_TILT_FIX',  t['fix_ang'].get()),
+            # (撤) MSAK_TILT_FIX: 未选中 tilt 自动维持 boot 默认
         ]
         for i in range(8):
             params.append((f'MSAK_ANG_{i+1}', t['angles'][i].get()))
@@ -1006,8 +1003,8 @@ class BenchApp:
                     f'{"成功" if ok else "部分失败"}')
         self.set_status('任务已下发 · 等 RC 解锁 或 软触发', 'success')
 
-        # 启录制 (即使没 sensor, fc 端 PWM 也照样录)
-        if ok:
+        # 启录制 — 不管 sensor 在不在线都录 (fc 端 PWM + STATE 是核心)
+        if ok and self.fc:
             extra_config = {
                 '起始油门 (THR_START)': f'{t["thr_start"].get():.2f}',
                 '终点油门 (THR_MAX)':   f'{t["thr_max"].get():.2f}',
@@ -1112,8 +1109,12 @@ class BenchApp:
                 '即将软件 arm 触发任务 (不需 RC 解锁).\n\n'
                 '⚠ 确认机身已机械固定到台架! 继续?'):
             return
+        # 强制 0 → 1 边沿: 即使上次 SW_ARM 还是 1 (task 没回 IDLE),
+        # 也保证 lua 看到 false→true 跃迁触发新任务
+        self._set_param_safe('MSAK_SW_ARM', 0)
+        time.sleep(0.3)
         self._set_param_safe('MSAK_SW_ARM', 1)
-        self.log_st('[任务] 软触发 SW_ARM=1')
+        self.log_st('[任务] 软触发 (0→1 边沿)')
 
     def task_sw_stop(self):
         if not self._need_fc(): return
