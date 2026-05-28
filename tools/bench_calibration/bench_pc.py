@@ -274,10 +274,13 @@ class BenchApp:
         self.live_preview = tk.IntVar(value=0)
         self._last_push_ms = {}   # 滑杆节流 per-tilt
 
-        # 任务录制 (push_task 后启, BENCH DONE 后停)
+        # 任务录制 — 完全手动 (▶/■ 按钮开关), 跟 push_task / SW_ARM 解耦
         self._recording = False
         self._record_thread = None
         self._stop_record = threading.Event()
+        self._last_task_config: dict = {}
+        self._last_task_meta: dict = {'motors_str': 'manual', 'tilts_str': 'none',
+                                       'angles_str': 'manual', 'thr_range': 'manual'}
         self._cur_phase = 'IDLE'
         self._cur_ang_idx = 0
         self._cur_ang_deg = 0.0
@@ -669,8 +672,11 @@ class BenchApp:
                    style='Accent.TButton').pack(side='left', padx=20)
         ttk.Button(ops, text='■ 软停止', command=self.task_sw_stop
                    ).pack(side='left', padx=4)
-        ttk.Button(ops, text='⏸ 暂停录制 (收尾 CSV)',
-                   command=self._stop_recording).pack(side='left', padx=20)
+        # 录制开关 — 完全手动, 跟 push_task / SW_ARM 解耦
+        self.btn_rec = ttk.Button(ops, text='● 开始录制',
+                                   command=self.toggle_recording,
+                                   style='Accent.TButton')
+        self.btn_rec.pack(side='left', padx=20)
 
     # ─────────────────── 实时预览 Tab ──────────────────────
 
@@ -1018,29 +1024,46 @@ class BenchApp:
                     f'{"成功" if ok else "部分失败"}')
         self.set_status('任务已下发 · 等 RC 解锁 或 软触发', 'success')
 
-        # 启录制 — 不管 sensor 在不在线都录 (fc 端 PWM + STATE 是核心)
-        if ok and self.fc:
-            extra_config = {
-                '起始油门 (THR_START)': f'{t["thr_start"].get():.2f}',
-                '终点油门 (THR_MAX)':   f'{t["thr_max"].get():.2f}',
-                '步进 (THR_STEP)':      f'{t["thr_step"].get():.2f}',
-                '每档保持 (HOLD)':      f'{t["hold_ms"].get()} ms',
-                '启动 ramp (RAMP_MS)':  f'{t["ramp_ms"].get()} ms',
-                '结束缓降 (RAMP_DN)':   f'{t["ramp_dn"].get()} ms',
-                '电机 mask (bit)':      f'{m_mask}',
-                '倾转 mask (bit)':      f'{t_mask}',
-                '电机详单':              ','.join(f'M{m}' for m in range(1,13) if m_mask & (1 << (m-1))),
-                '倾转详单':              ','.join(nm for i,(nm,_,_) in enumerate(TILT_LIST) if t_mask & (1<<i)) or 'none',
-                '角度数 (ANG_N)':       f'{n_ang}',
-                '角度列表':              ang_str,
-                'S→DF 解耦 EN':         f'{self.cpl_en.get()}',
-                'S→DF 解耦 K':          f'{self.cpl_k.get():.2f}',
-            }
-            self._start_recording(motors_str='-'.join(ms),
-                                  tilts_str='-'.join(ts) or 'none',
-                                  angles_str=ang_str.replace(',', '-'),
-                                  thr_range=f'{int(t["thr_start"].get()*100)}-{int(t["thr_max"].get()*100)}',
-                                  config=extra_config)
+        # 录制不再 auto-start — 用户在主面板手动按 ▶ 开始录制
+        # 任务 metadata 仍记到 _last_task_config 给后续 _start_recording 当 CSV header
+        self._last_task_config = {
+            '起始油门 (THR_START)': f'{t["thr_start"].get():.2f}',
+            '终点油门 (THR_MAX)':   f'{t["thr_max"].get():.2f}',
+            '步进 (THR_STEP)':      f'{t["thr_step"].get():.2f}',
+            '每档保持 (HOLD)':      f'{t["hold_ms"].get()} ms',
+            '启动 ramp (RAMP_MS)':  f'{t["ramp_ms"].get()} ms',
+            '结束缓降 (RAMP_DN)':   f'{t["ramp_dn"].get()} ms',
+            '电机 mask (bit)':      f'{m_mask}',
+            '倾转 mask (bit)':      f'{t_mask}',
+            '电机详单':              ','.join(f'M{m}' for m in range(1,13) if m_mask & (1 << (m-1))),
+            '倾转详单':              ','.join(nm for i,(nm,_,_) in enumerate(TILT_LIST) if t_mask & (1<<i)) or 'none',
+            '角度数 (ANG_N)':       f'{n_ang}',
+            '角度列表':              ang_str,
+            'S→DF 解耦 EN':         f'{self.cpl_en.get()}',
+            'S→DF 解耦 K':          f'{self.cpl_k.get():.2f}',
+        }
+        self._last_task_meta = {
+            'motors_str': '-'.join(ms),
+            'tilts_str':  '-'.join(ts) or 'none',
+            'angles_str': ang_str.replace(',', '-'),
+            'thr_range':  f'{int(t["thr_start"].get()*100)}-{int(t["thr_max"].get()*100)}',
+        }
+
+    def toggle_recording(self):
+        """手动开关录制: 未录 → 起新 CSV; 在录 → 收尾."""
+        if self._recording:
+            self._stop_recording()
+            if hasattr(self, 'btn_rec'):
+                self.btn_rec.config(text='● 开始录制')
+        else:
+            meta = self._last_task_meta
+            self._start_recording(motors_str=meta['motors_str'],
+                                  tilts_str=meta['tilts_str'],
+                                  angles_str=meta['angles_str'],
+                                  thr_range=meta['thr_range'],
+                                  config=self._last_task_config or None)
+            if hasattr(self, 'btn_rec') and self._recording:
+                self.btn_rec.config(text='■ 结束录制')
 
     def _start_recording(self, motors_str, tilts_str, angles_str, thr_range, config=None):
         # 若已在录: 先收尾旧 CSV, 再开新
@@ -1101,6 +1124,8 @@ class BenchApp:
             self.log_st(f'[录制] 收尾错: {e}')
         self._recording = False
         self._cur_phase = 'IDLE'
+        if hasattr(self, 'btn_rec'):
+            self.btn_rec.config(text='● 开始录制')
 
     def _parse_bench_status(self, txt):
         """从 'BENCH ang[1/2]=30.0 thr=15%' 提 ang_idx / ang / thr."""
