@@ -27,7 +27,7 @@ $VENV_PI --onefile \
     --hidden-import serial \
     --hidden-import tkinter \
     --collect-submodules pymavlink \
-    --add-data "transducer_ascii.py:." \
+    --add-data "transducer_modbus.py:." \
     --add-data "fc_mavlink.py:." \
     --add-data "recorder.py:." \
     --noconfirm \

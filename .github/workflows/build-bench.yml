@@ -41,7 +41,7 @@ jobs:
             --hidden-import serial `
             --hidden-import tkinter `
             --collect-submodules pymavlink `
-            --add-data "transducer_ascii.py;." `
+            --add-data "transducer_modbus.py;." `
             --add-data "fc_mavlink.py;." `
             --add-data "recorder.py;." `
             --noconfirm `
@@ -104,7 +104,7 @@ jobs:
             --hidden-import serial \
             --hidden-import tkinter \
             --collect-submodules pymavlink \
-            --add-data "transducer_ascii.py:." \
+            --add-data "transducer_modbus.py:." \
             --add-data "fc_mavlink.py:." \
             --add-data "recorder.py:." \
             --noconfirm \
