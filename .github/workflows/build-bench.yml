@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pymavlink pyserial pyinstaller
 
-      - name: Build bench_pc.exe
+      - name: Build bench_pc.exe (GUI)
         run: |
           cd tools/bench_calibration
           pyinstaller --onefile `
@@ -47,6 +47,21 @@ jobs:
             --noconfirm `
             bench_pc.py
 
+      - name: Build bench_cli.exe
+        run: |
+          cd tools/bench_calibration
+          pyinstaller --onefile `
+            --name bench_cli `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.dialects.v20.common `
+            --hidden-import serial `
+            --collect-submodules pymavlink `
+            --add-data "transducer_modbus.py;." `
+            --add-data "fc_mavlink.py;." `
+            --add-data "recorder.py;." `
+            --noconfirm `
+            bench_cli.py
+
       - name: Verify build
         env:
           PYTHONIOENCODING: utf-8
@@ -56,9 +71,11 @@ jobs:
           if (Test-Path "dist\bench_pc.exe") {
             $size = (Get-Item "dist\bench_pc.exe").Length / 1MB
             Write-Host ("OK bench_pc.exe: {0:N1} MB" -f $size)
-          } else {
-            throw "bench_pc.exe not found"
-          }
+          } else { throw "bench_pc.exe not found" }
+          if (Test-Path "dist\bench_cli.exe") {
+            $size = (Get-Item "dist\bench_cli.exe").Length / 1MB
+            Write-Host ("OK bench_cli.exe: {0:N1} MB" -f $size)
+          } else { throw "bench_cli.exe not found" }
 
       - name: Upload bench_pc artifact
         uses: actions/upload-artifact@v7
@@ -67,11 +84,20 @@ jobs:
           path: tools/bench_calibration/dist/bench_pc.exe
           retention-days: 30
 
+      - name: Upload bench_cli artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench_cli-windows
+          path: tools/bench_calibration/dist/bench_cli.exe
+          retention-days: 30
+
       - name: Attach to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: tools/bench_calibration/dist/bench_pc.exe
+          files: |
+            tools/bench_calibration/dist/bench_pc.exe
+            tools/bench_calibration/dist/bench_cli.exe
 
   build-linux:
     runs-on: ubuntu-latest
@@ -94,7 +120,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install pymavlink pyserial pyinstaller
 
-      - name: Build bench_pc (Linux)
+      - name: Build bench_pc (Linux GUI)
         run: |
           cd tools/bench_calibration
           pyinstaller --onefile \
@@ -110,21 +136,46 @@ jobs:
             --noconfirm \
             bench_pc.py
 
+      - name: Build bench_cli (Linux)
+        run: |
+          cd tools/bench_calibration
+          pyinstaller --onefile \
+            --name bench_cli \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.dialects.v20.common \
+            --hidden-import serial \
+            --collect-submodules pymavlink \
+            --add-data "transducer_modbus.py:." \
+            --add-data "fc_mavlink.py:." \
+            --add-data "recorder.py:." \
+            --noconfirm \
+            bench_cli.py
+
       - name: Verify build
         run: |
           cd tools/bench_calibration
           ls -la dist/
           test -f dist/bench_pc && echo "OK Linux bench_pc built"
+          test -f dist/bench_cli && echo "OK Linux bench_cli built"
 
-      - name: Upload artifact
+      - name: Upload bench_pc artifact
         uses: actions/upload-artifact@v7
         with:
           name: bench_pc-linux
           path: tools/bench_calibration/dist/bench_pc
           retention-days: 30
 
+      - name: Upload bench_cli artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench_cli-linux
+          path: tools/bench_calibration/dist/bench_cli
+          retention-days: 30
+
       - name: Attach to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: tools/bench_calibration/dist/bench_pc
+          files: |
+            tools/bench_calibration/dist/bench_pc
+            tools/bench_calibration/dist/bench_cli
