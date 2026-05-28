@@ -275,6 +275,7 @@ class BenchApp:
         self._last_push_ms = {}   # 滑杆节流 per-tilt
 
         # 任务录制 — 完全手动 (▶/■ 按钮开关), 跟 push_task / SW_ARM 解耦
+        self.recorder = Recorder('./bench_logs')
         self._recording = False
         self._record_thread = None
         self._stop_record = threading.Event()
@@ -1055,6 +1056,7 @@ class BenchApp:
             self._stop_recording()
             if hasattr(self, 'btn_rec'):
                 self.btn_rec.config(text='● 开始录制')
+            self.set_status('录制已停止', 'subtle')
         else:
             meta = self._last_task_meta
             self._start_recording(motors_str=meta['motors_str'],
@@ -1064,6 +1066,10 @@ class BenchApp:
                                   config=self._last_task_config or None)
             if hasattr(self, 'btn_rec') and self._recording:
                 self.btn_rec.config(text='■ 结束录制')
+                self.set_status('● 录制中', 'success')
+            else:
+                # 没起来 — 错误已经在 _start_recording 内 log_st, 这里再提示一下
+                self.set_status('⚠ 录制启动失败 — 看状态日志', 'danger')
 
     def _start_recording(self, motors_str, tilts_str, angles_str, thr_range, config=None):
         # 若已在录: 先收尾旧 CSV, 再开新
@@ -1074,7 +1080,9 @@ class BenchApp:
             path = self.recorder.start_task(motors_str, tilts_str, angles_str, thr_range,
                                             config=config)
         except Exception as e:
-            self.log_st(f'[录制] 启动失败: {e}')
+            import traceback
+            self.log_st(f'[录制] 启动失败: {type(e).__name__}: {e}')
+            self.log_st(traceback.format_exc().replace('\n', ' | '))
             return
         self._recording = True
         self._stop_record.clear()
