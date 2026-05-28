@@ -419,7 +419,7 @@ class BenchApp:
         head = ttk.LabelFrame(parent, text='  校准说明  ', padding=12)
         head.pack(fill='x', padx=10, pady=10)
         ttk.Label(head, justify='left', style='CardSubtle.TLabel', text=(
-            '校准原理: PWM = 45°PWM + 11.11 × 方向 × (角度 - 45°)\n'
+            '校准原理: PWM = ZERO + 11.11 × 方向 × (角度 - 45°)  (ZERO = body 45° 时的 PWM)\n'
             '步骤:\n'
             '  ① 飞控未解锁 + 开 "实时预览" 开关\n'
             '  ② 拖卡片内 "预览角度" 滑杆 → servo 实时跟着转\n'
@@ -485,7 +485,7 @@ class BenchApp:
         # 45° PWM 行
         f1 = ttk.Frame(card, style='Card.TFrame')
         f1.pack(fill='x', pady=4)
-        ttk.Label(f1, text='45° PWM:', style='Card.TLabel'
+        ttk.Label(f1, text='ZERO (45° PWM):', style='Card.TLabel'
                   ).pack(side='left', padx=(0, 8))
         sb_p45 = ttk.Spinbox(f1, from_=500, to=2500, increment=5,
                              textvariable=v['p45'], width=10,
@@ -875,7 +875,7 @@ class BenchApp:
         return int(max(500, min(2500, round(pwm))))
 
     def _on_cal_change(self, nm, push=True):
-        """卡片内 P45/DIR/preview_ang 改时, 更新 PWM 显示 + (live 模式)推飞控."""
+        """卡片内 ZERO/DIR/preview_ang 改时, 更新 PWM 显示 + (live 模式)推飞控."""
         widgets = self._cal_widgets.get(nm)
         if not widgets: return
         v = self.cal_vars[nm]
@@ -892,7 +892,7 @@ class BenchApp:
             if now_ms - last < 50:    # 50ms 节流
                 return
             self._last_push_ms[nm] = now_ms
-            # 设 CAL_PWM 直接写 PWM (绕公式, 调 P45 时显示=飞控)
+            # 设 CAL_PWM 直接写 PWM (绕公式, 调 ZERO 时显示=飞控)
             self._set_param_safe('MSAK_CAL_PWM', pwm)
             self._set_param_safe('MSAK_CAL_CH',  ch)
 
@@ -920,11 +920,12 @@ class BenchApp:
     def cal_save_row(self, nm):
         if not self._need_fc(): return
         v = self.cal_vars[nm]
+        # 主线 schema: TLT_<id>_ZERO/DIR (idx 跟主线对齐, 校的值刷主线 main.lua 直接复用)
         ok = all([
-            self._set_param_safe(f'TLT_{nm}_P45', v['p45'].get()),
-            self._set_param_safe(f'TLT_{nm}_DIR', v['dir'].get()),
+            self._set_param_safe(f'TLT_{nm}_ZERO', v['p45'].get()),
+            self._set_param_safe(f'TLT_{nm}_DIR',  v['dir'].get()),
         ])
-        self.log_st(f'[校准] 保存 {nm}: 45°PWM={v["p45"].get()} 方向={v["dir"].get()} '
+        self.log_st(f'[校准] 保存 {nm}: ZERO={v["p45"].get()} DIR={v["dir"].get()} '
                     f'{"OK" if ok else "失败"}')
 
     def cal_save_all(self):
@@ -939,7 +940,8 @@ class BenchApp:
     def cal_load_all(self):
         if not self._need_fc(): return
         for nm, _, _ in TILT_LIST:
-            for key, vk in [('P45', 'p45'), ('DIR', 'dir')]:
+            # 主线 schema TLT_<id>_ZERO (45° PWM) / DIR
+            for key, vk in [('ZERO', 'p45'), ('DIR', 'dir')]:
                 val = self.fc.get_param(f'TLT_{nm}_{key}', timeout=1.0)
                 if val is not None:
                     self.cal_vars[nm][vk].set(int(val))
