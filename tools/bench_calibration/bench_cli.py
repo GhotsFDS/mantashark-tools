@@ -30,7 +30,7 @@ import time
 from typing import Optional
 
 from fc_mavlink import FCMavlink
-from transducer_ascii import TransducerAscii
+from transducer_modbus import TransducerModbus as TransducerAscii
 from recorder import Recorder
 
 
@@ -97,7 +97,7 @@ def main():
     ap.add_argument('--fc',     default='/dev/ttyACM0', help='飞控串口')
     ap.add_argument('--fc-baud', type=int, default=115200)
     ap.add_argument('--sensor', default=None, help='传感器串口 (可选)')
-    ap.add_argument('--sensor-baud', type=int, default=9600)
+    ap.add_argument('--sensor-baud', type=int, default=115200)
     ap.add_argument('--out',    default='./bench_logs')
 
     ap.add_argument('--motors', required=True,

@@ -22,7 +22,7 @@ from tkinter import ttk, messagebox, font as tkfont
 
 from serial.tools import list_ports
 
-from transducer_ascii import TransducerAscii
+from transducer_modbus import TransducerModbus as TransducerAscii
 from fc_mavlink import FCMavlink
 from recorder import Recorder, RecordRow
 
@@ -241,7 +241,7 @@ class BenchApp:
         self.var_fc_port     = tk.StringVar()
         self.var_sensor_port = tk.StringVar()
         self.var_fc_baud     = tk.IntVar(value=115200)
-        self.var_sensor_baud = tk.IntVar(value=9600)
+        self.var_sensor_baud = tk.IntVar(value=115200)
         self._port_map = {}
 
         # 校准 var
