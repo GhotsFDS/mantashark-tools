@@ -116,6 +116,8 @@ def main():
     ap.add_argument('--cpl-en',    type=int,   default=1)
     ap.add_argument('--cpl-k',     type=float, default=1.0)
 
+    ap.add_argument('--tail-secs', type=float, default=3.0,
+                    help='DONE 后继续录的尾巴秒数 (默 3s)')
     ap.add_argument('--timeout',   type=int,   default=120,
                     help='整体超时 (秒, 防卡死)')
     ap.add_argument('--repeat',    type=int,   default=1,
@@ -253,8 +255,10 @@ def run_one(fc, sensor, args, m_mask, t_mask, angles, run_idx):
     fc.drain_statustext()   # 清残留消息, 等 lua 真正回 IDLE
     fc.set_param('MSAK_SW_ARM', 1)
 
-    # 监听
+    # 监听 — DONE 后继续录 tail_secs 秒尾巴 (默 3s)
+    tail_secs = getattr(args, 'tail_secs', 3.0)
     t0 = time.time()
+    t_done = None
     pwm_1_16 = [0] * 16; pwm_17_21 = [0] * 5
     cur_phase = 'WAIT'; cur_ang_idx = 0; cur_ang_deg = 0.0; cur_thr = 0.0
     last_sample = 0; last_log = 0
@@ -275,9 +279,13 @@ def run_one(fc, sensor, args, m_mask, t_mask, angles, run_idx):
                 elif 'RAMP_DOWN' in txt: cur_phase = 'RAMP_DOWN'
                 elif 'START'   in txt: cur_phase = 'START'
                 elif 'DONE'    in txt:
-                    cur_phase = 'DONE'; done = True
+                    cur_phase = 'DONE'
+                    if not done: t_done = time.time()
+                    done = True
                 elif 'ABORT'   in txt:
-                    cur_phase = 'ABORT'; done = True
+                    cur_phase = 'ABORT'
+                    if not done: t_done = time.time()
+                    done = True
         now = time.time()
         if now - last_sample >= 0.1:
             last_sample = now
@@ -300,8 +308,8 @@ def run_one(fc, sensor, args, m_mask, t_mask, angles, run_idx):
                 v_str = f'V={battery.voltage_v:.1f} I={battery.current_a:.1f}' if battery.voltage_v > 0 else ''
                 print(f'  [{now-t0:5.1f}] {cur_phase:8s} ang[{cur_ang_idx}]={cur_ang_deg:.0f}° '
                       f'thr={cur_thr:.0f}%  M1={pwm_1_16[0]} {s_str}  {v_str}')
-        if done:
-            time.sleep(0.5)
+        # DONE 后继续录 tail_secs 秒尾巴, 再 break
+        if done and t_done is not None and (time.time() - t_done) >= tail_secs:
             break
         time.sleep(0.05)
 

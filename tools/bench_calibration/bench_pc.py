@@ -669,6 +669,8 @@ class BenchApp:
                    style='Accent.TButton').pack(side='left', padx=20)
         ttk.Button(ops, text='■ 软停止', command=self.task_sw_stop
                    ).pack(side='left', padx=4)
+        ttk.Button(ops, text='⏸ 暂停录制 (收尾 CSV)',
+                   command=self._stop_recording).pack(side='left', padx=20)
 
     # ─────────────────── 实时预览 Tab ──────────────────────
 
@@ -1041,8 +1043,10 @@ class BenchApp:
                                   config=extra_config)
 
     def _start_recording(self, motors_str, tilts_str, angles_str, thr_range, config=None):
+        # 若已在录: 先收尾旧 CSV, 再开新
         if self._recording:
-            return
+            self.log_st('[录制] 新任务到 — 先收尾上次 CSV')
+            self._stop_recording()
         try:
             path = self.recorder.start_task(motors_str, tilts_str, angles_str, thr_range,
                                             config=config)
@@ -1111,10 +1115,10 @@ class BenchApp:
         elif 'RAMP_DOWN' in txt: self._cur_phase = 'RAMP_DOWN'
         elif 'DONE' in txt:
             self._cur_phase = 'DONE'
-            self._stop_recording()
+            # 不自动停录, 留尾巴; 下次 push_task 才关 CSV
         elif 'ABORT' in txt:
             self._cur_phase = 'ABORT'
-            self._stop_recording()
+            # 同上
         elif 'START' in txt:
             self._cur_phase = 'START'
 
