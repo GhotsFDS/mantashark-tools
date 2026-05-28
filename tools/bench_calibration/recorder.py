@@ -58,7 +58,8 @@ class Recorder:
         fields = ['t_pc', 's1', 's2', 's3']
         for i in range(1, 22):
             fields.append(f'pwm{i}')
-        fields += ['phase', 'ang_idx', 'ang_deg', 'thr_pct', 'fc_status']
+        fields += ['volt_v', 'curr_a', 'batt_pct', 'consumed_mah',
+                   'phase', 'ang_idx', 'ang_deg', 'thr_pct', 'fc_status']
         self._writer = csv.DictWriter(self._fh, fieldnames=fields)
         self._writer.writeheader()
         self._row_count = 0
@@ -97,8 +98,11 @@ class Recorder:
         self._writer.writerow(d)
         self._row_count += 1
 
-    def write_task(self, t_pc, sensor, pwm_1_16, pwm_17_21, phase, ang_idx, ang_deg, thr_pct, fc_status=''):
-        """v8 任务录: CH 1-21 全 PWM + phase 信息."""
+    def write_task(self, t_pc, sensor, pwm_1_16, pwm_17_21, phase, ang_idx, ang_deg, thr_pct,
+                   battery=None, fc_status=''):
+        """v8 任务录: CH 1-21 全 PWM + phase + 电池信息.
+        battery: 可选 BatteryState (含 voltage_v/current_a/remaining_pct/consumed_mah)
+        """
         if self._writer is None:
             return
         d = {'t_pc': f'{t_pc:.4f}',
@@ -108,6 +112,14 @@ class Recorder:
         for i in range(17, 22):
             idx = i - 17
             d[f'pwm{i}'] = pwm_17_21[idx] if idx < len(pwm_17_21) else ''
+        # 电池数据
+        if battery is not None:
+            d['volt_v']       = f'{battery.voltage_v:.2f}'
+            d['curr_a']       = f'{battery.current_a:.2f}'
+            d['batt_pct']     = battery.remaining_pct
+            d['consumed_mah'] = f'{battery.consumed_mah:.0f}'
+        else:
+            d['volt_v'] = d['curr_a'] = d['batt_pct'] = d['consumed_mah'] = ''
         d['phase']   = phase
         d['ang_idx'] = ang_idx
         d['ang_deg'] = ang_deg

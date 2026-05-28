@@ -286,17 +286,20 @@ def run_one(fc, sensor, args, m_mask, t_mask, angles, run_idx):
                 pwm_1_16 = list(servo.pwm[:16])
                 pwm_17_21 = list(servo.pwm[16:21])
             sensor_vals = sensor.get_latest() if sensor else {}
+            battery = fc.latest_battery()
             recorder.write_task(
                 t_pc=now - t0, sensor=sensor_vals,
                 pwm_1_16=pwm_1_16, pwm_17_21=pwm_17_21,
                 phase=cur_phase, ang_idx=cur_ang_idx,
-                ang_deg=cur_ang_deg, thr_pct=cur_thr, fc_status='',
+                ang_deg=cur_ang_deg, thr_pct=cur_thr,
+                battery=battery, fc_status='',
             )
             if now - last_log >= 1.0:
                 last_log = now
                 s_str = '  '.join(f's{c}={sensor_vals.get(c, "-")}' for c in [1,2,3])
+                v_str = f'V={battery.voltage_v:.1f} I={battery.current_a:.1f}' if battery.voltage_v > 0 else ''
                 print(f'  [{now-t0:5.1f}] {cur_phase:8s} ang[{cur_ang_idx}]={cur_ang_deg:.0f}° '
-                      f'thr={cur_thr:.0f}%  M1={pwm_1_16[0]} {s_str}')
+                      f'thr={cur_thr:.0f}%  M1={pwm_1_16[0]} {s_str}  {v_str}')
         if done:
             time.sleep(0.5)
             break

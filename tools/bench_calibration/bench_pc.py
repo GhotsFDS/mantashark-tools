@@ -322,6 +322,15 @@ class BenchApp:
             font=(self.theme['mono'][0], 14, 'bold'))
         self.lbl_bot_sensor.pack(anchor='w')
 
+        # 底部常驻 电池监控栏 (飞控电池电压/电流/累计)
+        bottom_batt = ttk.LabelFrame(self._root, text='  电池监控 (飞控读)  ',
+                                      padding=(15, 4))
+        bottom_batt.pack(fill='x', side='bottom', padx=20, pady=(0, 2))
+        self.lbl_bot_batt = ttk.Label(bottom_batt, text='— 未连接飞控 —',
+            style='Mono.TLabel',
+            font=(self.theme['mono'][0], 12, 'bold'))
+        self.lbl_bot_batt.pack(anchor='w')
+
         # 底部状态栏
         statusbar = ttk.Frame(self._root)
         statusbar.pack(fill='x', side='bottom', padx=20, pady=(0, 8))
@@ -1059,6 +1068,7 @@ class BenchApp:
                     if servo and servo.pwm:
                         pwm_1_16 = list(servo.pwm[:16])
                         pwm_17_21 = list(servo.pwm[16:21])
+                battery = self.fc.latest_battery() if self.fc else None
                 self.recorder.write_task(
                     t_pc=time.time() - t0,
                     sensor=sensor_vals,
@@ -1067,6 +1077,7 @@ class BenchApp:
                     ang_idx=self._cur_ang_idx,
                     ang_deg=self._cur_ang_deg,
                     thr_pct=self._cur_thr,
+                    battery=battery,
                     fc_status='',
                 )
             except Exception as e:
@@ -1163,6 +1174,19 @@ class BenchApp:
 
         if self._connected and self.fc:
             try:
+                # 电池实时
+                batt = self.fc.latest_battery()
+                if batt and batt.voltage_v > 0:
+                    pct_str = f'{batt.remaining_pct}%' if batt.remaining_pct >= 0 else '—'
+                    self.lbl_bot_batt.config(text=(
+                        f'电压 = {batt.voltage_v:>5.2f} V    '
+                        f'电流 = {batt.current_a:>6.2f} A    '
+                        f'功率 = {batt.voltage_v * batt.current_a:>6.1f} W    '
+                        f'剩余 = {pct_str:>4s}    '
+                        f'消耗 = {batt.consumed_mah:>5.0f} mAh'
+                    ))
+                else:
+                    self.lbl_bot_batt.config(text='— 飞控未返回电池数据 (检查 BATT_MONITOR) —')
                 servo = self.fc.latest_servo()
                 if servo:
                     # pwm[0..15]=ch1-16, pwm[16..31]=ch17-32

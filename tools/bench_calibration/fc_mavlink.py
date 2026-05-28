@@ -26,6 +26,15 @@ class ServoState:
     # pwm[0..15] = ch1-16 (port=0), pwm[16..31] = ch17-32 (port=1)
 
 
+@dataclass
+class BatteryState:
+    t_pc: float = 0.0
+    voltage_v: float = 0.0    # 电池电压 V
+    current_a: float = 0.0    # 电流 A
+    remaining_pct: int = -1   # 剩余 % (-1 未知)
+    consumed_mah: float = 0.0 # 累计消耗 mAh
+
+
 class FCMavlink:
     def __init__(self, port: str, baud: int = 115200):
         self.port = port
@@ -37,6 +46,7 @@ class FCMavlink:
         self._listener_thread: Optional[threading.Thread] = None
         self._statustext_buf: deque = deque(maxlen=200)   # (t, severity, text)
         self._servo_latest: Optional[ServoState] = None
+        self._battery_latest: BatteryState = BatteryState()
         self._param_cache: dict[str, float] = {}
         self._lock = threading.Lock()
 
@@ -106,6 +116,44 @@ class FCMavlink:
                             if 0 <= idx < 32:
                                 self._servo_latest.pwm[idx] = getattr(msg, fld)
                     self._servo_latest.t_pc = time.time()
+            elif t == 'BATTERY_STATUS':
+                # MAVLink BATTERY_STATUS — 多 cell 电池详细数据
+                # voltages[0] = mV (UINT16_MAX=未连接), current_battery = cA (10mA), battery_remaining = %
+                try:
+                    voltages = list(msg.voltages) if hasattr(msg, 'voltages') else []
+                    v_mv = voltages[0] if voltages and voltages[0] != 65535 else 0
+                    cur_ca = msg.current_battery if hasattr(msg, 'current_battery') else -1
+                    pct = msg.battery_remaining if hasattr(msg, 'battery_remaining') else -1
+                    consumed = msg.current_consumed if hasattr(msg, 'current_consumed') else 0
+                    with self._lock:
+                        self._battery_latest = BatteryState(
+                            t_pc=time.time(),
+                            voltage_v=v_mv / 1000.0 if v_mv > 0 else 0.0,
+                            current_a=cur_ca / 100.0 if cur_ca > 0 else 0.0,
+                            remaining_pct=int(pct),
+                            consumed_mah=float(consumed),
+                        )
+                except Exception:
+                    pass
+            elif t == 'SYS_STATUS':
+                # SYS_STATUS — 备用源, voltage_battery (mV), current_battery (cA), battery_remaining (%)
+                # 若 BATTERY_STATUS 还没收到, SYS_STATUS fallback
+                try:
+                    v_mv = msg.voltage_battery if hasattr(msg, 'voltage_battery') else 0
+                    cur_ca = msg.current_battery if hasattr(msg, 'current_battery') else -1
+                    pct = msg.battery_remaining if hasattr(msg, 'battery_remaining') else -1
+                    with self._lock:
+                        # 若现有数据 stale (>2s) 才用 SYS_STATUS
+                        if time.time() - self._battery_latest.t_pc > 2.0:
+                            self._battery_latest = BatteryState(
+                                t_pc=time.time(),
+                                voltage_v=v_mv / 1000.0 if v_mv > 0 else 0.0,
+                                current_a=cur_ca / 100.0 if cur_ca > 0 else 0.0,
+                                remaining_pct=int(pct),
+                                consumed_mah=0.0,
+                            )
+                except Exception:
+                    pass
             elif t == 'PARAM_VALUE':
                 with self._lock:
                     self._param_cache[msg.param_id] = msg.param_value
@@ -147,6 +195,10 @@ class FCMavlink:
     def latest_servo(self) -> Optional[ServoState]:
         with self._lock:
             return self._servo_latest
+
+    def latest_battery(self) -> BatteryState:
+        with self._lock:
+            return self._battery_latest
 
     def drain_statustext(self) -> list[tuple[float, int, str]]:
         """Get all STATUSTEXT received since last drain. Returns (t, sev, text) list."""
