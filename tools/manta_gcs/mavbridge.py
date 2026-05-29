@@ -245,14 +245,8 @@ class Bridge:
         self._comp = self.mav.target_component
         print(f'[bridge] ✓ FC sys={self._sys} comp={self._comp} type={m.type}')
 
-        # P7.7: 显式请求 NAMED_VALUE_FLOAT 流 (默认不发, lua mixer.get_live_factors 推 5 路 K_eff+LAYER)
-        # MAV_CMD_SET_MESSAGE_INTERVAL = 511, msg_id NAMED_VALUE_FLOAT = 251, 200000us = 5Hz
-        try:
-            self.mav.mav.command_long_send(self._sys, self._comp, 511, 0,
-                                           251, 200000, 0, 0, 0, 0, 0)
-            print('[bridge] requested NAMED_VALUE_FLOAT @ 5Hz')
-        except Exception as e:
-            print(f'[bridge] warn: NAMED_VALUE_FLOAT interval request 失败: {e}')
+        # 纯 raw 架构: 不再写死流请求. GCS 连入后自己发 set_msg_interval 请求
+        # 所需消息+频率 (ATTITUDE/VFR_HUD/NAMED_VALUE_FLOAT/...), 加信号/改频率不碰 mavbridge.
 
         # 起 MP forward 出口 (Mission Planner / QGC 接这些 UDP 端点)
         for spec in self.mp_outs:
@@ -299,208 +293,87 @@ class Bridge:
                     pass
             t = m.get_type()
             data = None
-            if t == 'HEARTBEAT':
-                flight_mode = mavutil.mode_string_v10(m) if hasattr(mavutil, 'mode_string_v10') else str(m.custom_mode)
-                armed = (m.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
-                # custom_mode 数字暴露给前端 — Plane 自定义 27/29 mode_string_v10 返回 "Mode(27)" 无法识别
-                data = {'type': 'heartbeat', 'mode': flight_mode, 'custom_mode': int(m.custom_mode), 'armed': armed}
-            elif t == 'ATTITUDE':
-                data = {'type': 'attitude',
-                        'roll':  math.degrees(m.roll),
-                        'pitch': math.degrees(m.pitch),
-                        'yaw':   math.degrees(m.yaw)}
-            elif t == 'VFR_HUD':
-                data = {'type': 'vfr_hud',
-                        'airspeed': m.airspeed, 'groundspeed': m.groundspeed,
-                        'alt': m.alt, 'climb': m.climb, 'throttle': m.throttle}
-            elif t == 'GPS_RAW_INT':
-                # v9 P4: 扩 yaw (双头 RTK heading, cdeg, 0=invalid) + alt + vel
-                # P7.9.25: 加 lat/lon (Map tab 显示当前位置) + hdg (cog)
-                yaw_cd = getattr(m, 'yaw', 0)
-                yaw_deg = (yaw_cd / 100.0) if yaw_cd and yaw_cd != 0 else None
-                data = {'type': 'gps',
-                        'fix_type': m.fix_type,
-                        'sats': m.satellites_visible,
-                        'hdop': m.eph / 100.0 if m.eph != 0xFFFF else None,
-                        'lat': m.lat,                # degE7 (Map.tsx /1e7)
-                        'lon': m.lon,                # degE7
-                        'hdg': getattr(m, 'cog', 0), # course over ground cdeg (Map /100)
-                        'yaw_deg': yaw_deg,
-                        'alt_m': (m.alt / 1000.0) if m.alt else 0,
-                        'vel_mps': (m.vel / 100.0) if m.vel != 0xFFFF else None,
-                        'gps_id': 1}
-            elif t == 'GPS2_RAW':
-                yaw_cd = getattr(m, 'yaw', 0)
-                yaw_deg = (yaw_cd / 100.0) if yaw_cd and yaw_cd != 0 else None
-                data = {'type': 'gps2',
-                        'fix_type': m.fix_type,
-                        'sats': m.satellites_visible,
-                        'hdop': m.eph / 100.0 if m.eph != 0xFFFF else None,
-                        'yaw_deg': yaw_deg,
-                        'alt_m': (m.alt / 1000.0) if m.alt else 0,
-                        'vel_mps': (m.vel / 100.0) if m.vel != 0xFFFF else None,
-                        'gps_id': 2}
-            elif t == 'PARAM_VALUE':
-                name = m.param_id
-                if hasattr(name, 'decode'):
-                    name = name.decode('ascii', errors='replace')
-                name = str(name).rstrip('\x00')
-                data = {'type': 'param', 'name': name,
-                        'value': float(m.param_value),
-                        'index': m.param_index,
-                        'count': m.param_count}
-            elif t == 'GLOBAL_POSITION_INT':
-                # Push rover position to RTK NtripClient for $GPGGA (VRS support).
-                # Suppressed broadcast to WS (Tuner UI doesn't need this stream).
-                if self.rtk is not None:
-                    try:
-                        self.rtk.update_rover_position(
-                            m.lat / 1e7, m.lon / 1e7, m.alt / 1000.0)
-                    except Exception:
-                        pass
-                continue
-            elif t == 'STATUSTEXT':
-                # pymavlink MAVLink_statustext_message.__init__ 把 text 强制 ascii decode 替换非 ASCII,
-                # m.text 拿到时已经全是 '?'. 必须从 _text_raw (原始 bytes) 重新按 utf-8 解码.
-                raw = getattr(m, '_text_raw', None)
-                if raw is not None:
-                    txt = raw.split(b'\x00', 1)[0].decode('utf-8', errors='replace')
-                else:
-                    txt = str(m.text).rstrip('\x00')
-                data = {'type': 'statustext', 'severity': m.severity, 'text': txt}
-            elif t == 'RC_CHANNELS':
-                chans = [getattr(m, f'chan{i}_raw', 0) for i in range(1, 13)]   # 12 路
-                data = {'type': 'rc', 'channels': chans}
-            elif t == 'NAMED_VALUE_FLOAT':
-                name = str(m.name).rstrip('\x00')
-                data = {'type': 'named_float', 'name': name, 'value': float(m.value)}
-            elif t == 'SERVO_OUTPUT_RAW':
-                # ArduPilot 实际单帧发 16 路 (v2 extension: servo1..16_raw):
-                #   port=0 → SERVO 1-16, port=1 → SERVO 17-32 (Plane NUM_SERVO_CHANNELS=32)
-                # 必须用 MAVLink v2 dialect 才能拿到 servo9..16_raw 后 8 路.
-                # 见 ardupilot/libraries/GCS_MAVLink/GCS_Common.cpp:3374 send_servo_output_raw().
-                port = getattr(m, 'port', 0)
-                base = port * 16
-                for i in range(16):
-                    if base + i < 24:   # 我们关心 SERVO 1-24 (M1-12 + 7 倾转 = 19 路实际用)
-                        v = getattr(m, f'servo{i+1}_raw', 0)
-                        # ArduPilot 把 65535 当无效 → 转 0
-                        self.servo_buf[base + i] = 0 if v == 65535 else v
-                data = {'type': 'servo', 'channels': list(self.servo_buf)}
-            elif t == 'BATTERY_STATUS':
-                # battery 1: m.id == 0 (0-indexed).
-                # ArduPilot 偶尔某帧 current_battery=-1 / cells 全 65535 (临时未读到),
-                # 用 last_battery_* 缓存保持上次有效值, 防 UI 在 "5.2A" 和 "—" 之间跳变.
-                if m.id == 0:
-                    cells = [c for c in m.voltages[:10] if c != 65535]
-                    if cells:
-                        self.last_battery_voltage = sum(cells) / 1000.0
-                    if m.current_battery >= 0:
-                        self.last_battery_current = m.current_battery / 100.0
-                    if m.battery_remaining >= 0:
-                        self.last_battery_remaining = int(m.battery_remaining)
-                    if m.current_consumed >= 0:
-                        self.last_battery_consumed = int(m.current_consumed)
-                    data = {'type': 'battery',
-                            'voltage': self.last_battery_voltage,
-                            'current': self.last_battery_current,
-                            'remaining': self.last_battery_remaining,
-                            'consumed_mah': self.last_battery_consumed}
-            elif t == 'SYS_STATUS':
-                # 老固件兜底, 单电池. 同样用缓存防跳变.
-                if m.voltage_battery > 0:
-                    self.last_battery_voltage = m.voltage_battery / 1000.0
-                if m.current_battery >= 0:
-                    self.last_battery_current = m.current_battery / 100.0
-                if m.battery_remaining >= 0:
-                    self.last_battery_remaining = int(m.battery_remaining)
-                data = {'type': 'battery',
-                        'voltage': self.last_battery_voltage,
-                        'current': self.last_battery_current,
-                        'remaining': self.last_battery_remaining,
-                        'consumed_mah': self.last_battery_consumed,
-                        'fallback': True}
-            # ═════════════ Mission protocol (参考 MP saveWPs) ═════════════
-            elif t in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
-                # fc → GCS: 请求第 seq 个 mission item, 我们 upload state 弹一个
+
+            # ═══ 纯 raw 透传架构: 遥测一律 {type:'mav', mt, f}, GCS 自己解析 ═══
+            # 保留服务端必须处理的: mission 协议状态机 (RPC 支持) / RTK rover tap / STATUSTEXT utf-8.
+            # 新增遥测信号 / 改频率 → 全在 GCS 侧 (set_message_interval), 不碰 mavbridge.
+
+            # ── mission 协议 (upload/download 状态机, 非遥测, 服务端处理) ──
+            if t in ('MISSION_REQUEST_INT', 'MISSION_REQUEST'):
                 if self._mission_upload is not None:
                     seq = int(m.seq)
                     if 0 <= seq < len(self._mission_upload):
                         wp = self._mission_upload[seq]
-                        # 用 MISSION_ITEM_INT (lat/lon 整数 1e-7 deg, 精度高于 float)
                         self.mav.mav.mission_item_int_send(
-                            self._sys, self._comp,
-                            seq,
+                            self._sys, self._comp, seq,
                             int(wp.get('frame', mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT)),
                             int(wp.get('cmd', mavutil.mavlink.MAV_CMD_NAV_WAYPOINT)),
-                            0, 1,                              # current, autocontinue
+                            0, 1,
                             float(wp.get('p1', 0)), float(wp.get('p2', 0)),
                             float(wp.get('p3', 0)), float(wp.get('p4', 0)),
-                            int(wp['lat'] * 1e7),
-                            int(wp['lon'] * 1e7),
-                            float(wp.get('alt', 0)),
+                            int(wp['lat'] * 1e7), int(wp['lon'] * 1e7), float(wp.get('alt', 0)),
                             mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
-                        continue   # 不广播给 WS
+                continue
             elif t == 'MISSION_ACK':
-                # upload 完成
                 if self._mission_upload is not None:
                     res = int(m.type)
                     res_name = mavutil.mavlink.enums['MAV_MISSION_RESULT'][res].name if res in mavutil.mavlink.enums['MAV_MISSION_RESULT'] else str(res)
                     elapsed = (time.time() * 1000) - self._mission_upload_start_ms
-                    data = {'type': 'mission_uploaded',
-                            'count': len(self._mission_upload),
-                            'result': res, 'result_name': res_name,
-                            'elapsed_ms': int(elapsed)}
+                    data = {'type': 'mission_uploaded', 'count': len(self._mission_upload),
+                            'result': res, 'result_name': res_name, 'elapsed_ms': int(elapsed)}
                     self._mission_upload = None
             elif t == 'MISSION_COUNT':
-                # download 流程: fc 报 N → 启动 request 循环
                 if self._mission_download is not None:
                     self._mission_download['count'] = int(m.count)
                     self._mission_download['items'] = [None] * int(m.count)
                     self._mission_download['next_seq'] = 0
                     if m.count > 0:
-                        self.mav.mav.mission_request_int_send(
-                            self._sys, self._comp, 0,
+                        self.mav.mav.mission_request_int_send(self._sys, self._comp, 0,
                             mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
                     else:
-                        # 空 mission, 直接 ACK
                         self.mav.mav.mission_ack_send(self._sys, self._comp,
-                                                      mavutil.mavlink.MAV_MISSION_ACCEPTED,
-                                                      mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                            mavutil.mavlink.MAV_MISSION_ACCEPTED, mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
                         data = {'type': 'mission_list', 'count': 0, 'wps': []}
                         self._mission_download = None
             elif t == 'MISSION_ITEM_INT':
-                # download 收 item
                 if self._mission_download is not None:
                     seq = int(m.seq)
                     if 0 <= seq < self._mission_download['count']:
                         self._mission_download['items'][seq] = {
-                            'seq': seq,
-                            'frame': int(m.frame),
-                            'cmd': int(m.command),
-                            'lat': m.x / 1e7,
-                            'lon': m.y / 1e7,
-                            'alt': float(m.z),
+                            'seq': seq, 'frame': int(m.frame), 'cmd': int(m.command),
+                            'lat': m.x / 1e7, 'lon': m.y / 1e7, 'alt': float(m.z),
                             'p1': float(m.param1), 'p2': float(m.param2),
-                            'p3': float(m.param3), 'p4': float(m.param4),
-                        }
+                            'p3': float(m.param3), 'p4': float(m.param4)}
                     next_seq = seq + 1
                     if next_seq < self._mission_download['count']:
                         self._mission_download['next_seq'] = next_seq
-                        self.mav.mav.mission_request_int_send(
-                            self._sys, self._comp, next_seq,
+                        self.mav.mav.mission_request_int_send(self._sys, self._comp, next_seq,
                             mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
                     else:
-                        # 全收完, ACK + 转发
                         self.mav.mav.mission_ack_send(self._sys, self._comp,
-                                                      mavutil.mavlink.MAV_MISSION_ACCEPTED,
-                                                      mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
-                        data = {'type': 'mission_list',
-                                'count': self._mission_download['count'],
+                            mavutil.mavlink.MAV_MISSION_ACCEPTED, mavutil.mavlink.MAV_MISSION_TYPE_MISSION)
+                        data = {'type': 'mission_list', 'count': self._mission_download['count'],
                                 'wps': self._mission_download['items']}
                         self._mission_download = None
+                # mission item 不再 raw 透传 (download 中), 但非 download 期也无意义
+                if data is None:
+                    continue
             else:
-                continue
+                # ── RTK rover-position tap (服务端 NTRIP $GPGGA 需要), 之后仍 raw 透传 ──
+                if t == 'GLOBAL_POSITION_INT' and self.rtk is not None:
+                    try:
+                        self.rtk.update_rover_position(m.lat / 1e7, m.lon / 1e7, m.alt / 1000.0)
+                    except Exception:
+                        pass
+                # ── generic raw 透传: 任意 MAVLink msg → {type:'mav', mt, f} ──
+                f = m.to_dict()
+                f.pop('mavpackettype', None)
+                # STATUSTEXT utf-8: to_dict 的 text 已被 ascii mangle, 用 _text_raw 重解
+                if t == 'STATUSTEXT':
+                    raw_txt = getattr(m, '_text_raw', None)
+                    if raw_txt is not None:
+                        f['text'] = raw_txt.split(b'\x00', 1)[0].decode('utf-8', errors='replace')
+                data = {'type': 'mav', 'mt': t, 'f': f}
             if data is not None and self.loop is not None:
                 asyncio.run_coroutine_threadsafe(self.broadcast(data), self.loop)
 
@@ -602,6 +475,21 @@ class Bridge:
                     base_mode = mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
                     self.mav.mav.command_long_send(self._sys, self._comp, 176, 0,
                                                     base_mode, mode_id, 0, 0, 0, 0, 0)
+                elif t == 'command_long':
+                    # 通用 MAV_CMD 出口: GCS 自主发任意 command (不用为新 cmd 改 mavbridge)
+                    # {type:'command_long', command:<id>, params:[p1..p7]}
+                    p = list(req.get('params', [])) + [0] * 7
+                    self.mav.mav.command_long_send(self._sys, self._comp,
+                        int(req['command']), 0,
+                        float(p[0]), float(p[1]), float(p[2]), float(p[3]),
+                        float(p[4]), float(p[5]), float(p[6]))
+                elif t == 'set_msg_interval':
+                    # GCS 自主请求任意消息流+频率 (MAV_CMD_SET_MESSAGE_INTERVAL=511)
+                    # {type:'set_msg_interval', msgid:<id>, hz:<rate>} (hz<=0 → 关流)
+                    hz = float(req.get('hz', 0))
+                    interval_us = (1e6 / hz) if hz > 0 else -1
+                    self.mav.mav.command_long_send(self._sys, self._comp, 511, 0,
+                        int(req['msgid']), interval_us, 0, 0, 0, 0, 0)
                 elif t == 'analyze_log':
                     # v9 P4: BIN 离线分析 (CPU-bound, 走 thread executor 不阻塞 WS)
                     if _analyze_log is None:
