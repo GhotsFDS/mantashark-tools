@@ -108,6 +108,10 @@ class LogAnalyzer:
         self.msk8 = []     # (t, mode, v_tgt, base_pitch, layer) — dispatcher mode + phase 状态
         self.msk_phase_changes = []   # (t, phase_int)  MSKP — wig_auto phase 切换 marker
         self.msk_run_starts = []      # (t, cruise, strat, profile, v_tgt)  MSKR — armed 边沿 run 配置 latch
+        # P8-yaw: heading-hold 调参诊断
+        self.msky = []     # (t, ht,ha,he,rd,ra,re,yo,V,ro,pi) — 两环 in/out + V + 姿态 (12.5Hz)
+        self.mskz = []     # (t, ap,rp,ri,rd,sl,en) — 增益基线自记录 (1Hz)
+        self.piqy = []     # (t, Tar,Act,P,I,D,FF) — VTOL yaw rate PID 真值拆分 (原生 25Hz)
         self.gps = []      # (t, spd, alt)
         self.rcin = []     # (t, ch1..ch19)
         self.rcou = []     # (t, ch1..ch19)  19 = MantaShark v9 7 倾转占 SERVO13-19
@@ -184,6 +188,24 @@ class LogAnalyzer:
                 # dispatcher mode + V_TGT + base_pitch + layer (50Hz)
                 try:
                     self.msk8.append((ts, m.mode, m.vtd, m.bpc, m.lay))
+                except AttributeError:
+                    pass
+            elif t == 'MSKY':
+                # P8-yaw heading-hold: ht/ha/he angle环, rd/ra/re/yo rate环, V/ro/pi 上下文
+                try:
+                    self.msky.append((ts, m.ht, m.ha, m.he, m.rd, m.ra, m.re, m.yo, m.V, m.ro, m.pi))
+                except AttributeError:
+                    pass
+            elif t == 'MSKZ':
+                # P8-yaw 增益基线自记录 (1Hz): ANG_YAW_P / RAT_YAW_P/I/D / SLEW / en
+                try:
+                    self.mskz.append((ts, m.ap, m.rp, m.ri, m.rd, m.sl, m.en))
+                except AttributeError:
+                    pass
+            elif t == 'PIQY':
+                # 原生 VTOL yaw rate PID 真值拆分 (P/I/D/FF), rate 环精确贡献
+                try:
+                    self.piqy.append((ts, m.Tar, m.Act, m.P, m.I, m.D, getattr(m, 'FF', 0)))
                 except AttributeError:
                     pass
             elif t == 'MSKP':
@@ -807,6 +829,101 @@ class LogAnalyzer:
                 if mx > 0.1:
                     print(colored(f"  ⚠ {name}_drift 峰值 |{mx:.3f}| > 0.1, 控制律 trim 不当", C.YEL))
 
+    def yaw_hold_analysis(self):
+        """P8-yaw heading-hold 调参分析: 基线增益 + angle/rate 两环各自贡献 + V 分桶 + 耦合."""
+        if not self.msky and not self.mskz and not self.piqy:
+            return
+        print()
+        print(colored(" 13. Heading hold 调参 (MSKZ 基线 / MSKY 两环 / PIQY rate PID)", C.CYN+C.BOLD))
+
+        # ── 增益基线 (MSKZ): 这份 log 当时真用的什么 gain ──
+        if self.mskz:
+            z = self.mskz[-1]
+            print(colored("  增益基线 (本 log 实际生效):", C.BOLD))
+            print(f"    Q_A_ANG_YAW_P = {z[1]:.3f}   (angle 环: heading误差→rate target)")
+            print(f"    Q_A_RAT_YAW_P = {z[2]:.4f}  I = {z[3]:.4f}  D = {z[4]:.4f}   (rate 环)")
+            print(f"    ATC_SLEW_YAW  = {z[5]:.1f}")
+            # 检测飞行中改过增益
+            aps = set(round(s[1],3) for s in self.mskz)
+            if len(aps) > 1:
+                print(colored(f"    ⚠ ANG_YAW_P 飞行中变过: {sorted(aps)} (分段对比时注意)", C.YEL))
+        else:
+            print(colored("  (无 MSKZ — 旧固件? 增益基线从 PARM 读 Q_A_*_YAW)", C.YEL))
+
+        if not self.msky:
+            print(colored("  (无 MSKY — heading hold 未激活或旧固件)", C.YEL))
+            return
+
+        import statistics
+        # MSKY: (t, ht,ha,he,rd,ra,re,yo,V,ro,pi)
+        he  = [s[3] for s in self.msky]
+        rd  = [s[4] for s in self.msky]
+        ra  = [s[5] for s in self.msky]
+        yo  = [s[7] for s in self.msky]
+        V   = [s[8] for s in self.msky]
+        ro  = [s[9] for s in self.msky]
+        n = len(self.msky)
+
+        # ── angle 环 (heading误差 → rate demand) ──
+        print(colored(f"\n  [angle 环] heading 误差 → rate demand  (n={n})", C.BOLD))
+        he_abs = [abs(x) for x in he]
+        he_rms = (sum(x*x for x in he)/n) ** 0.5
+        print(f"    heading 误差: RMS={he_rms:.1f}°  峰值={max(he_abs):.1f}°  均值={statistics.mean(he):+.1f}°")
+        print(f"    rate demand:  峰值={max(abs(x) for x in rd):.1f}°/s   (= he × ANG_YAW_P)")
+        # 收敛性: 大误差后多久回 <2°
+        big = [i for i,x in enumerate(he_abs) if x > 5]
+        if big:
+            print(f"    |he|>5° 占比 {100*len(big)/n:.0f}% — heading 锁不紧" if len(big) > n*0.3
+                  else f"    |he|>5° 占比 {100*len(big)/n:.0f}% — 锁定基本可")
+
+        # ── rate 环 (rate误差 → yaw output) ──
+        print(colored("\n  [rate 环] rate 误差 → yaw output (KT 差动量)", C.BOLD))
+        yo_abs = [abs(x) for x in yo]
+        sat = sum(1 for x in yo_abs if x > 0.95)
+        print(f"    yaw output: 峰值={max(yo_abs):.3f}  RMS={(sum(x*x for x in yo)/n)**0.5:.3f}")
+        if sat > 0:
+            pct = 100*sat/n
+            col = C.RED if pct > 20 else C.YEL if pct > 5 else C.GRN
+            print(colored(f"    饱和 (|yo|>0.95) 占比 {pct:.0f}% "
+                          + ("→ KT 权限不足, ATC 要求超出物理能力" if pct > 20
+                             else "→ 偶发饱和, 可接受" if pct > 0 else ""), col))
+        # rate 跟踪: rd (demand) vs ra (actual)
+        rd_rms = (sum(x*x for x in rd)/n) ** 0.5
+        ra_rms = (sum(x*x for x in ra)/n) ** 0.5
+        print(f"    rate 跟踪: demand RMS={rd_rms:.1f}°/s  actual RMS={ra_rms:.1f}°/s")
+
+        # ── PIQY: rate 环 P/I/D 精确贡献 (原生) ──
+        if self.piqy:
+            P = [abs(s[3]) for s in self.piqy]
+            I = [abs(s[4]) for s in self.piqy]
+            D = [abs(s[5]) for s in self.piqy]
+            print(colored("\n  [rate 环 P/I/D 拆分] PIQY 原生 (精确, 非 lua 近似):", C.BOLD))
+            print(f"    P 项 RMS={ (sum(x*x for x in P)/len(P))**0.5:.4f}  峰值={max(P):.4f}")
+            print(f"    I 项 RMS={ (sum(x*x for x in I)/len(I))**0.5:.4f}  峰值={max(I):.4f}")
+            print(f"    D 项 RMS={ (sum(x*x for x in D)/len(D))**0.5:.4f}  峰值={max(D):.4f}")
+            ip = (sum(x*x for x in I)/len(I))**0.5
+            pp = (sum(x*x for x in P)/len(P))**0.5
+            if pp > 1e-6 and ip > pp*1.5:
+                print(colored("    ⚠ I 项 >> P 项: 可能稳态误差大 (P 不够) 或 I 过积分", C.YEL))
+
+        # ── V 分桶 (gain schedule 信号) ──
+        print(colored("\n  [速度分桶] plant 增益 ∝ V², 看是否需 V gain schedule", C.BOLD))
+        buckets = [(0,5),(5,8),(8,11),(11,99)]
+        print(f"    {'V 段':>10} {'样本':>6} {'|he|RMS':>9} {'|yo|RMS':>9} {'饱和%':>7}")
+        for lo, hi in buckets:
+            idx = [i for i in range(n) if lo <= V[i] < hi]
+            if not idx: continue
+            bhe = (sum(he[i]**2 for i in idx)/len(idx))**0.5
+            byo = (sum(yo[i]**2 for i in idx)/len(idx))**0.5
+            bsat = 100*sum(1 for i in idx if abs(yo[i])>0.95)/len(idx)
+            print(f"    {f'{lo}-{hi}m/s':>10} {len(idx):>6} {bhe:>8.1f}° {byo:>9.3f} {bsat:>6.0f}%")
+        print("    (高 V 段同样 |he| 下 |yo| 应更小: 升力刚度↑; 若高 V 反而饱和 → 增益过高需降)")
+
+        # ── 耦合 (yaw 动作时 roll 偏移) ──
+        ro_abs = [abs(x) for x in ro]
+        if max(ro_abs) > 3:
+            print(colored(f"\n  [耦合] yaw 期 roll 峰值={max(ro_abs):.1f}° — 检查 yaw→roll 串扰", C.YEL))
+
     def msk_anomalies(self):
         has_any = self.msk_emergency or self.msk_errors or self.msk_att_guard
         if not has_any:
@@ -882,11 +999,11 @@ class LogAnalyzer:
                 if cmd_min < act_min - 1: clamp_warn += ' ⚠ commanded 低 actual (撞 LMIN)'
                 print(f"  {n:5s}  {cmd_min:>5.0f}~{cmd_max:>5.0f}°  {act_min:>5.0f}~{act_max:>5.0f}°  {cmd_avg:>+8.1f}°{clamp_warn}")
 
-    # ═══ 13. 参数修改建议 (heuristic) ═══
+    # ═══ 14. 参数修改建议 (heuristic) ═══
     def suggest_params(self):
         import statistics
         print(colored("\n" + "="*72, C.CYN))
-        print(colored(" 13. 参数修改建议 (heuristic, 仅供参考)", C.CYN+C.BOLD))
+        print(colored(" 14. 参数修改建议 (heuristic, 仅供参考)", C.CYN+C.BOLD))
         print(colored("="*72, C.CYN))
 
         suggestions = []   # list of (severity, current, suggested, reason)
@@ -915,29 +1032,58 @@ class LogAnalyzer:
                         f'body std={r_std:.1f}° > 3°',
                         f'Q_A_RAT_RLL_D {cur:.4f} → {cur*1.5:.4f} (加 D)'))
 
-            # ── 3. yaw 振荡 / drift (从 ATT) ──
-            yaws = [r[3] for r in self.att if start <= r[0] <= end and -360 <= r[3] <= 360]
-            if len(yaws) >= 50:
-                # 标准差检测振荡
-                y_std = statistics.stdev(yaws)
-                # 偏入口检测 drift (= 后 1/3 mean vs 前 1/3 mean)
-                third = len(yaws) // 3
-                if third > 5:
-                    early_mean = sum(yaws[:third]) / third
-                    late_mean  = sum(yaws[-third:]) / third
-                    drift = abs(((late_mean - early_mean + 540) % 360) - 180)
-                else:
-                    drift = 0
-                if y_std > 5.0:
-                    kd = self.params.get('WIGA_HDG_KD', 10.0)
-                    suggestions.append(('⚠', 'yaw 振荡',
-                        f'yaw std={y_std:.1f}° > 5°',
-                        f'WIGA_HDG_KD {kd:.1f} → {kd*1.5:.1f} (加 D 阻尼) 或 WIGA_HDG_KP 减 30%'))
-                if drift > 10.0:
-                    kp = self.params.get('WIGA_HDG_KP', 45.0)
-                    suggestions.append(('⚠', 'yaw drift',
-                        f'前→后 drift={drift:.1f}° > 10°',
-                        f'WIGA_HDG_KP {kp:.0f} → {kp*1.3:.0f} (加 P 收紧)'))
+            # ── 3. yaw heading-hold 调参 (P8-yaw: 基于 MSKY/MSKZ/PIQY, ATC Q_A_*_YAW) ──
+            # 注: 旧 WIGA_HDG_KP/KD 已废弃 (P7.9.15), yaw 走 C++ ATC angle+rate 两环.
+            seg_y = [m for m in self.msky if start <= m[0] <= end]
+            if len(seg_y) >= 30:
+                heL = [m[3] for m in seg_y]        # heading 误差
+                yoL = [m[7] for m in seg_y]        # motors:get_yaw output
+                ny  = len(seg_y)
+                he_rms = (sum(x*x for x in heL)/ny) ** 0.5
+                sat_pct = 100*sum(1 for y in yoL if abs(y) > 0.95)/ny
+                # 增益基线 (MSKZ 优先, fallback PARM)
+                segz = [m for m in self.mskz if start <= m[0] <= end] or self.mskz
+                ang_p = (segz[-1][1] if segz else self.params.get('Q_A_ANG_YAW_P', 3.0))
+                rat_p = (segz[-1][2] if segz else self.params.get('Q_A_RAT_YAW_P', 0.15))
+                # PIQY I/P 比 (积分饱和检测)
+                segq = [m for m in self.piqy if start <= m[0] <= end]
+                ip_ratio = 0
+                if len(segq) >= 10:
+                    pp = (sum(m[3]**2 for m in segq)/len(segq))**0.5
+                    ii = (sum(m[4]**2 for m in segq)/len(segq))**0.5
+                    ip_ratio = ii/pp if pp > 1e-6 else 0
+
+                # 规则树
+                if sat_pct > 20 and he_rms > 10:
+                    suggestions.append(('⚠', 'yaw 饱和+大误差 = KT 权限不足',
+                        f'|yo|>0.95 占比 {sat_pct:.0f}%, 同时 he RMS={he_rms:.0f}°',
+                        f'调增益无效 — yaw 输出已撞满还转不动. 查 KT L/R 差动有效性/机械; '
+                        f'或 Q_A_ANG_YAW_P {ang_p:.1f} 降到 {ang_p*0.7:.1f} 避免无效饱和'))
+                elif sat_pct > 20:
+                    suggestions.append(('⚠', 'yaw 小误差就饱和 = 增益过高',
+                        f'|yo|>0.95 占比 {sat_pct:.0f}% 但 he RMS 仅 {he_rms:.1f}°',
+                        f'Q_A_RAT_YAW_P {rat_p:.3f} → {rat_p*0.8:.3f} (降 20% 防过冲)'))
+                elif he_rms > 5:
+                    suggestions.append(('⚠', 'heading 锁不紧 (有余量)',
+                        f'he RMS={he_rms:.1f}° > 5°, 饱和仅 {sat_pct:.0f}% (权限够)',
+                        f'先 Q_A_ANG_YAW_P {ang_p:.1f} → {ang_p*1.3:.1f} (angle 环收紧); '
+                        f'仍松再 Q_A_RAT_YAW_P {rat_p:.3f} → {rat_p*1.3:.3f}'))
+                if ip_ratio > 1.5:
+                    ri = (segz[-1][3] if segz else self.params.get('Q_A_RAT_YAW_I', 0.03))
+                    suggestions.append(('⚠', 'yaw rate I 积分主导 (PIQY)',
+                        f'I/P RMS 比 = {ip_ratio:.1f} > 1.5 (稳态误差大)',
+                        f'升 Q_A_RAT_YAW_P 让 P 担更多; 若伴振荡则 Q_A_RAT_YAW_I {ri:.3f} → {ri*0.7:.3f}'))
+
+                # V gain schedule 信号: 低 V 松 / 高 V 饱和
+                lo_v = [m for m in seg_y if m[8] < 8]
+                hi_v = [m for m in seg_y if m[8] >= 9]
+                if len(lo_v) >= 10 and len(hi_v) >= 10:
+                    lo_he = (sum(m[3]**2 for m in lo_v)/len(lo_v))**0.5
+                    hi_sat = 100*sum(1 for m in hi_v if abs(m[7])>0.95)/len(hi_v)
+                    if lo_he > 8 and hi_sat > 15:
+                        suggestions.append(('ℹ', 'yaw 需 V gain schedule',
+                            f'低V(<8) he RMS={lo_he:.0f}° 松 / 高V(≥9) 饱和 {hi_sat:.0f}%',
+                            f'单套增益跨速度段不够 — lua 加 V 相关 yaw 权限缩放 (Phase 4)'))
 
             # ── 4. V_PI saturate (Layer 2 占比) ──
             if self.msk5:
@@ -1011,6 +1157,7 @@ class LogAnalyzer:
         self.preflight_events()
         self.msk_anomalies()
         self.wig_state_analysis()   # P7.8p: MSK5/6/8 + MSKP/MSKR 综合
+        self.yaw_hold_analysis()    # P8-yaw: MSKZ 基线 + MSKY 两环 + PIQY rate PID
         self.suggest_params()        # P7.8ω: heuristic 参数建议
 
         # 总结
