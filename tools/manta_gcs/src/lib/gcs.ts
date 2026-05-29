@@ -34,6 +34,21 @@ export class GcsClient {
   private reconnectTimer: number | null = null;
   public connected = false;
   public lastHeartbeatMs = 0;
+  // 纯 raw 架构: mavbridge 发 {type:'mav', mt, f}, 解析在此 (旧 mavbridge if/elif 移来)
+  private _servoBuf = new Array(24).fill(0);
+  private _batV = 0; private _batI: number | null = null; private _batRem = 0; private _batMah = 0;
+  // GCS 自主请求的遥测流 (msgid → hz). 加信号/改频率只改这里, 不碰 mavbridge.
+  private _streams: Record<number, number> = {
+    30: 25,   // ATTITUDE
+    74: 5,    // VFR_HUD
+    24: 2,    // GPS_RAW_INT
+    124: 2,   // GPS2_RAW
+    1: 2,     // SYS_STATUS (battery fallback)
+    147: 2,   // BATTERY_STATUS
+    65: 10,   // RC_CHANNELS
+    36: 10,   // SERVO_OUTPUT_RAW
+    251: 5,   // NAMED_VALUE_FLOAT (lua live: K_eff / heading-hold he/yo)
+  };
 
   constructor(url = 'ws://127.0.0.1:8765') {
     this.url = url;
@@ -57,10 +72,23 @@ export class GcsClient {
     this.ws.onopen = () => {
       this.connected = true;
       this.emit({ type: 'status', connected: true });
+      // GCS 自主请求所需遥测流 (纯 raw 架构, mavbridge 不再写死)
+      this.requestStreams();
     };
     this.ws.onmessage = (ev) => {
       try {
-        const m = JSON.parse(ev.data) as GcsMessage;
+        const raw = JSON.parse(ev.data);
+        if (raw && raw.type === 'mav') {
+          // 纯 raw MAVLink → 翻译成 curated 事件 (旧 mavbridge if/elif 逻辑)
+          const ms = this.translateMav(raw.mt, raw.f || {});
+          for (const m of ms) {
+            if (m.type === 'heartbeat') this.lastHeartbeatMs = Date.now();
+            this.emit(m);
+          }
+          return;
+        }
+        // 非遥测 (status / mission_* / rtk_* / log_analysis_* / pong) 原样透传
+        const m = raw as GcsMessage;
         if (m.type === 'heartbeat') this.lastHeartbeatMs = Date.now();
         this.emit(m);
       } catch {}
@@ -73,6 +101,98 @@ export class GcsClient {
       this.emit({ type: 'status', connected: false });
       this.ws = null;
     };
+  }
+
+  // GCS 自主请求遥测流 (纯 raw 架构). 改 _streams 即可加信号/改频率, 不碰 mavbridge.
+  requestStreams() {
+    for (const [msgid, hz] of Object.entries(this._streams)) {
+      this.send({ type: 'set_msg_interval', msgid: Number(msgid), hz });
+    }
+  }
+  // 运行时调单条流频率 (e.g. yaw tune 面板要更高 NVF 率)
+  setStreamRate(msgid: number, hz: number) {
+    this._streams[msgid] = hz;
+    this.send({ type: 'set_msg_interval', msgid, hz });
+  }
+
+  // 把 raw MAVLink {mt, f} 翻译成现有 curated 事件 (旧 mavbridge if/elif 移来, tab 不动)
+  private translateMav(mt: string, f: any): GcsMessage[] {
+    const D = 180 / Math.PI;
+    switch (mt) {
+      case 'HEARTBEAT': {
+        const cm = Number(f.custom_mode || 0);
+        const MODE_NAMES: Record<number, string> = { 17: 'QSTABILIZE', 27: 'WIG_AUTO', 29: 'WIG_RECV' };
+        return [{ type: 'heartbeat', mode: MODE_NAMES[cm] || `Mode(${cm})`,
+          custom_mode: cm, armed: (Number(f.base_mode || 0) & 128) !== 0 }];
+      }
+      case 'ATTITUDE':
+        return [{ type: 'attitude', roll: f.roll * D, pitch: f.pitch * D, yaw: f.yaw * D }];
+      case 'VFR_HUD':
+        return [{ type: 'vfr_hud', airspeed: f.airspeed, groundspeed: f.groundspeed,
+          alt: f.alt, climb: f.climb, throttle: f.throttle }];
+      case 'GPS_RAW_INT': {
+        const yc = Number(f.yaw || 0);
+        return [{ type: 'gps', fix_type: f.fix_type, sats: f.satellites_visible,
+          hdop: f.eph !== 65535 ? f.eph / 100 : null,
+          lat: f.lat, lon: f.lon, hdg: f.cog || 0,
+          yaw_deg: yc && yc !== 0 ? yc / 100 : null,
+          alt_m: f.alt ? f.alt / 1000 : 0,
+          vel_mps: f.vel !== 65535 ? f.vel / 100 : null, gps_id: 1 }];
+      }
+      case 'GPS2_RAW': {
+        const yc = Number(f.yaw || 0);
+        return [{ type: 'gps2', fix_type: f.fix_type, sats: f.satellites_visible,
+          hdop: f.eph !== 65535 ? f.eph / 100 : null,
+          yaw_deg: yc && yc !== 0 ? yc / 100 : null,
+          alt_m: f.alt ? f.alt / 1000 : 0,
+          vel_mps: f.vel !== 65535 ? f.vel / 100 : null, gps_id: 2 }];
+      }
+      case 'PARAM_VALUE': {
+        let name = String(f.param_id || '').replace(/\0+$/, '');
+        return [{ type: 'param', name, value: Number(f.param_value),
+          index: f.param_index, count: f.param_count }];
+      }
+      case 'STATUSTEXT':
+        return [{ type: 'statustext', severity: f.severity,
+          text: String(f.text || '').replace(/\0+$/, '') }];
+      case 'RC_CHANNELS': {
+        const ch = [];
+        for (let i = 1; i <= 12; i++) ch.push(Number(f[`chan${i}_raw`] || 0));
+        return [{ type: 'rc', channels: ch }];
+      }
+      case 'SERVO_OUTPUT_RAW': {
+        const base = Number(f.port || 0) * 16;
+        for (let i = 0; i < 16; i++) {
+          if (base + i < 24) {
+            const v = Number(f[`servo${i + 1}_raw`] || 0);
+            this._servoBuf[base + i] = v === 65535 ? 0 : v;
+          }
+        }
+        return [{ type: 'servo', channels: [...this._servoBuf] }];
+      }
+      case 'NAMED_VALUE_FLOAT':
+        return [{ type: 'named_float', name: String(f.name || '').replace(/\0+$/, ''),
+          value: Number(f.value) }];
+      case 'BATTERY_STATUS': {
+        if (Number(f.id) !== 0) return [];
+        const cells = (f.voltages || []).slice(0, 10).filter((c: number) => c !== 65535);
+        if (cells.length) this._batV = cells.reduce((a: number, b: number) => a + b, 0) / 1000;
+        if (f.current_battery >= 0) this._batI = f.current_battery / 100;
+        if (f.battery_remaining >= 0) this._batRem = Math.trunc(f.battery_remaining);
+        if (f.current_consumed >= 0) this._batMah = Math.trunc(f.current_consumed);
+        return [{ type: 'battery', voltage: this._batV, current: this._batI,
+          remaining: this._batRem, consumed_mah: this._batMah }];
+      }
+      case 'SYS_STATUS': {
+        if (f.voltage_battery > 0) this._batV = f.voltage_battery / 1000;
+        if (f.current_battery >= 0) this._batI = f.current_battery / 100;
+        if (f.battery_remaining >= 0) this._batRem = Math.trunc(f.battery_remaining);
+        return [{ type: 'battery', voltage: this._batV, current: this._batI,
+          remaining: this._batRem, consumed_mah: this._batMah, fallback: true }];
+      }
+      default:
+        return [];  // 未关心的 msg 丢弃 (新信号要用时在此加 case 或走 named_float)
+    }
   }
 
   disconnect() {
