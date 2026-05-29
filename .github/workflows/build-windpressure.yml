@@ -1,0 +1,184 @@
+name: Build EDF Windpressure EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/edf_windpressure/**'
+      - '.github/workflows/build-windpressure.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller matplotlib pillow
+
+      - name: Build windpressure_gui.exe (GUI)
+        run: |
+          cd tools/edf_windpressure
+          pyinstaller --onefile `
+            --name windpressure_gui `
+            --windowed `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.dialects.v20.common `
+            --hidden-import serial `
+            --hidden-import tkinter `
+            --hidden-import matplotlib.backends.backend_tkagg `
+            --hidden-import PIL.ImageTk `
+            --hidden-import PIL._tkinter_finder `
+            --collect-submodules pymavlink `
+            --noconfirm `
+            windpressure_gui.py
+
+      - name: Build windpressure_cli.exe
+        run: |
+          cd tools/edf_windpressure
+          pyinstaller --onefile `
+            --name windpressure_cli `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.dialects.v20.common `
+            --hidden-import serial `
+            --collect-submodules pymavlink `
+            --noconfirm `
+            windpressure_pc.py
+
+      - name: Verify build
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          cd tools/edf_windpressure
+          dir dist
+          if (Test-Path "dist\windpressure_gui.exe") {
+            $size = (Get-Item "dist\windpressure_gui.exe").Length / 1MB
+            Write-Host ("OK windpressure_gui.exe: {0:N1} MB" -f $size)
+          } else { throw "windpressure_gui.exe not found" }
+          if (Test-Path "dist\windpressure_cli.exe") {
+            $size = (Get-Item "dist\windpressure_cli.exe").Length / 1MB
+            Write-Host ("OK windpressure_cli.exe: {0:N1} MB" -f $size)
+          } else { throw "windpressure_cli.exe not found" }
+
+      - name: Upload windpressure_gui artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windpressure_gui-windows
+          path: tools/edf_windpressure/dist/windpressure_gui.exe
+          retention-days: 30
+
+      - name: Upload windpressure_cli artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windpressure_cli-windows
+          path: tools/edf_windpressure/dist/windpressure_cli.exe
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/edf_windpressure/dist/windpressure_gui.exe
+            tools/edf_windpressure/dist/windpressure_cli.exe
+            tools/edf_windpressure/edf_windpressure.lua
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller matplotlib pillow
+
+      - name: Build windpressure_gui (Linux GUI)
+        run: |
+          cd tools/edf_windpressure
+          pyinstaller --onefile \
+            --name windpressure_gui \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.dialects.v20.common \
+            --hidden-import serial \
+            --hidden-import tkinter \
+            --hidden-import matplotlib.backends.backend_tkagg \
+            --hidden-import PIL.ImageTk \
+            --hidden-import PIL._tkinter_finder \
+            --collect-submodules pymavlink \
+            --noconfirm \
+            windpressure_gui.py
+
+      - name: Build windpressure_cli (Linux)
+        run: |
+          cd tools/edf_windpressure
+          pyinstaller --onefile \
+            --name windpressure_cli \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.dialects.v20.common \
+            --hidden-import serial \
+            --collect-submodules pymavlink \
+            --noconfirm \
+            windpressure_pc.py
+
+      - name: Verify build
+        run: |
+          cd tools/edf_windpressure
+          ls -la dist/
+          test -f dist/windpressure_gui && echo "OK Linux windpressure_gui built"
+          test -f dist/windpressure_cli && echo "OK Linux windpressure_cli built"
+
+      - name: Upload windpressure_gui artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windpressure_gui-linux
+          path: tools/edf_windpressure/dist/windpressure_gui
+          retention-days: 30
+
+      - name: Upload windpressure_cli artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windpressure_cli-linux
+          path: tools/edf_windpressure/dist/windpressure_cli
+          retention-days: 30
+
+      - name: Upload FC lua script
+        uses: actions/upload-artifact@v7
+        with:
+          name: edf_windpressure-lua
+          path: tools/edf_windpressure/edf_windpressure.lua
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/edf_windpressure/dist/windpressure_gui
+            tools/edf_windpressure/dist/windpressure_cli
+            tools/edf_windpressure/edf_windpressure.lua
