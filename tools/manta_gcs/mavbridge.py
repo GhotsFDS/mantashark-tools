@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MantaShark Mixer Tuner — MAVLink ↔ WebSocket bridge.
+"""MantaShark 地面站 — MAVLink ↔ WebSocket bridge.
 
 浏览器 SPA 通过 ws://127.0.0.1:8765 连本脚本, 本脚本通过 pymavlink 连飞控.
 

@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul 2>&1
-title MantaShark Mixer Tuner
+title MantaShark 地面站
 setlocal
 
 cd /d "%~dp0"
 
-echo [launcher] MantaShark Mixer Tuner 启动中...
+echo [launcher] MantaShark 地面站 启动中...
 echo.
 
 REM ── 找 Python ──

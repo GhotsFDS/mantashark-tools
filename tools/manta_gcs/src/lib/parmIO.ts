@@ -4,7 +4,7 @@ import { TILT_IDS } from './actuators';
 
 // 导出为 .parm 文本 (ArduPilot GCS 兼容)
 export function exportParm(params: ParamSet): string {
-  let txt = '# MantaShark v8.0 混控参数 (由 mixer_tuner v9 导出)\n';
+  let txt = '# MantaShark v8.0 混控参数 (由 manta_gcs v9 导出)\n';
   txt += `# 生成: ${new Date().toISOString()}\n`;
   txt += `# 对应 Lua: scripts-plane/{mixer,tilt_driver,guard,preflight}.lua\n\n`;
   const groups: Record<string, string[]> = {
@@ -58,7 +58,7 @@ export function importParm(text: string, current: ParamSet): { updated: ParamSet
 
 // 导出 phase_config.lua 片段
 export function exportPhaseLua(phaseConfig: Record<PhaseName, PhaseConfig>): string {
-  let txt = '-- MantaShark v8 PHASE_CONFIG (mixer_tuner v9 导出)\n';
+  let txt = '-- MantaShark v8 PHASE_CONFIG (manta_gcs v9 导出)\n';
   txt += '-- 替换 scripts-plane/phases.lua 里 PHASE_CONFIG 块\n\n';
   txt += 'local PHASE_CONFIG = {\n';
   const order: PhaseName[] = ['STATIONARY', 'TAXI', 'CUSHION', 'GROUND_EFFECT', 'EMERGENCY'];

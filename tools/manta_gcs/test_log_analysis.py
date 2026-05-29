@@ -1,5 +1,5 @@
 """Unit tests for log_analysis.py — v9 P4 LOG 离线分析.
-跑: cd tools/mixer_tuner && python3 -m pytest test_log_analysis.py -v
+跑: cd tools/manta_gcs && python3 -m pytest test_log_analysis.py -v
 或 source sim/.venv/bin/activate 后跑.
 """
 import math

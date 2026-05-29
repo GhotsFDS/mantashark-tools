@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MantaShark Mixer Tuner 一键启动器 (Linux/Mac).
+# MantaShark 地面站 一键启动器 (Linux/Mac).
 # - 启动 mavbridge.py — 交互式让用户选串口和波特率
 # - 浏览器打开 dist/index.html
 # - 失败/退出都暂停 + 等回车, 不闪退

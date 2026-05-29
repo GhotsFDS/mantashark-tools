@@ -1,6 +1,6 @@
 @echo off
 REM 本地构建 Windows 发布包. 跑前装好 Python 3.11+ + Node.js.
-REM 产物: tools/mixer_tuner/release/MantaSharkTuner-windows.zip
+REM 产物: tools/manta_gcs/release/MantaSharkTuner-windows.zip
 chcp 65001 >nul 2>&1
 setlocal
 
@@ -42,7 +42,7 @@ copy /y launch.bat               release\MantaSharkTuner-windows\
 (
     echo @echo off
     echo chcp 65001 ^>nul 2^>^&1
-    echo title MantaShark Mixer Tuner
+    echo title MantaShark 地面站
     echo cd /d "%%~dp0"
     echo echo [launcher] 浏览器打开 Tuner.html
     echo start "" "%%CD%%\Tuner.html"
@@ -54,7 +54,7 @@ copy /y launch.bat               release\MantaSharkTuner-windows\
 ) > release\MantaSharkTuner-windows\start.bat
 
 (
-    echo MantaShark Mixer Tuner v9 — Windows 单文件发布包
+    echo MantaShark 地面站 v9 — Windows 单文件发布包
     echo.
     echo 使用:
     echo   双击 start.bat

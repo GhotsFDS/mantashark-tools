@@ -1,8 +1,8 @@
 {
-  "name": "mantashark-mixer-tuner",
+  "name": "manta-gcs",
   "version": "9.0.0",
   "type": "module",
-  "description": "MantaShark v8 Mixer Tuner — WIG flight controller debug/tuning SPA",
+  "description": "MantaShark v8 地面站 — WIG flight controller debug/tuning SPA",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b --noCheck && vite build",
