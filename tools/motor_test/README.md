@@ -7,8 +7,9 @@
 | 文件 | 作用 |
 |---|---|
 | `motor_test.lua` | FC 端: 油门阶梯状态机, 广播 `MTHR`(commanded油门)+`MST`(状态), param 表 `MTT_` (key=87) |
-| `motor_test_gui.py` | 上位机 GUI: 配参 / ▶开始测试 / 实时 V/I/W / ●记录 ■停止 / 实时曲线 |
-| `logs/` | CSV 输出 (`motor_<时间>.csv`) |
+| `motor_test_gui.py` | 上位机 GUI: 配参 / ▶开始测试 / 实时 V/I/W/拉力 / ●记录 ■停止 / 实时曲线 |
+| `transducer_modbus.py` | 拉力变送器 Modbus RTU 驱动 (跟 bench 同一套) |
+| `logs/` | CSV 输出 (`motor_<时间>.csv`, 打包版写在 exe 同目录的 `logs/`) |
 
 ## 前置
 
@@ -55,7 +56,17 @@ python3 motor_test_gui.py
 | `MTT_RAMP_DN` | 1500 | 缓降 ms |
 | `MTT_SW_ARM` | 0 | 软触发 0→1 边沿 |
 
+## 拉力变送器 (Modbus)
+
+独立 RS232/485→USB-CH340 串口, Modbus RTU 115200 8N1 slave 1 (跟 bench 台架同一套)。
+- GUI "拉力变送器" 区: 选口 → **连接** (握手验证)
+- **拉力 = (|ch1| + |ch2| − tare) × 标定系数(N/count)**
+- **标定 N/count**: 填系数 + 应用 (原始 ADC count → N; 不知道就先填 1.0 看原始值)
+- **拉力归零**: 无载时点一下, 记录 |ch1|+|ch2| 当零点
+- 实时显示 + 写进 CSV (`thrust` 列 + `ch1_raw`/`ch2_raw` 原始 count)
+
 ## CSV 列
 
-`t_s, throttle_pct, state, voltage_v, current_a, power_w`
+`t_s, throttle_pct, state, voltage_v, current_a, power_w, thrust, ch1_raw, ch2_raw`
 state: 0=IDLE 1=RAMP_UP 2=HOLD 3=RAMP_DN 4=DONE
+thrust = (|ch1|+|ch2| − tare) × 标定系数

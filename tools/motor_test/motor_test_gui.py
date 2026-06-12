@@ -22,6 +22,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from pymavlink import mavutil
 from serial.tools import list_ports
+from transducer_modbus import TransducerModbus
 
 MOTOR_NAMES = {1:'SL1',2:'SL2',3:'SR1',4:'SR2',5:'DFL',6:'DFR',
                7:'TL1',8:'TL2',9:'TR1',10:'TR2',11:'RDL',12:'RDR'}
@@ -49,7 +50,11 @@ class FCWorker(threading.Thread):
         self._stop = threading.Event(); self._cmd = queue.Queue(); self.lock = threading.Lock()
         # 共享
         self.connected = False; self.conn_state = 'disconnected'; self.busy = 'idle'
-        self.live = dict(thr=0.0, state=0, v=0.0, i=0.0, p=0.0)
+        self.live = dict(thr=0.0, state=0, v=0.0, i=0.0, p=0.0,
+                         thrust=0.0, ch1=0.0, ch2=0.0)
+        # 拉力变送器 (独立 Modbus 串口): 拉力 = (|ch1|+|ch2| - tare) * scale
+        self._td = None; self.td_state = 'disconnected'
+        self.td_scale = 1.0; self.td_tare = 0.0
         self.plot = collections.deque(maxlen=3000)   # (t, thr%, current)
         self.status = collections.deque(maxlen=300)
         self.rec_on = False; self.rec_path = None; self.rec_rows = 0
@@ -65,13 +70,18 @@ class FCWorker(threading.Thread):
     def cmd_abort(self):               self._cmd.put(('abort',))
     def cmd_log_start(self, path):     self._cmd.put(('log_start', path))
     def cmd_log_stop(self):            self._cmd.put(('log_stop',))
+    def cmd_td_connect(self, port, baud): self._cmd.put(('td_connect', port, baud))
+    def cmd_td_disconnect(self):       self._cmd.put(('td_disconnect',))
+    def cmd_td_tare(self):             self._cmd.put(('td_tare',))
+    def cmd_td_scale(self, s):         self._cmd.put(('td_scale', s))
     def shutdown(self):                self._stop.set()
 
     def snap(self):
         with self.lock:
             return dict(connected=self.connected, conn_state=self.conn_state, busy=self.busy,
                         live=dict(self.live), plot=list(self.plot), status=list(self.status),
-                        rec_on=self.rec_on, rec_path=self.rec_path, rec_rows=self.rec_rows)
+                        rec_on=self.rec_on, rec_path=self.rec_path, rec_rows=self.rec_rows,
+                        td_state=self.td_state, td_scale=self.td_scale)
 
     # ---------- 主循环 ----------
     def run(self):
@@ -110,9 +120,26 @@ class FCWorker(threading.Thread):
                 self._link_lost(f'接收异常:{e}'); continue
             if self._last_rx and now - self._last_rx > 5.0:
                 self._link_lost('5s 无数据 (FC 断开/重启?)'); continue
+            # 拉力变送器: 读最新 |ch1|+|ch2|
+            if self._td is not None:
+                lt = self._td.get_latest()
+                c1 = lt.get(1) or 0.0; c2 = lt.get(2) or 0.0
+                raw = abs(c1) + abs(c2)
+                with self.lock:
+                    self.live['ch1'] = c1; self.live['ch2'] = c2
+                    self.live['thrust'] = (raw - self.td_tare) * self.td_scale
             # 连续记录 (20Hz, 逐行 flush, 崩溃不丢)
             if self.rec_on and self._logf and now - self._last_write >= 1.0/LOG_HZ:
                 self._write_row(now); self._last_write = now
+        # 退出清理
+        if self._logf: self._log_stop()
+        if self._td:
+            try: self._td.close()
+            except Exception: pass
+        if self.master is not None:
+            try:
+                self._send('MTT_SW_ARM',0); self._send('MTT_EN',0); self.master.close()
+            except Exception: pass
 
     # ---------- 命令 ----------
     def _handle_cmd(self, cmd):
@@ -123,6 +150,44 @@ class FCWorker(threading.Thread):
         elif n == 'abort': self._abort()
         elif n == 'log_start': self._log_start(cmd[1])
         elif n == 'log_stop': self._log_stop()
+        elif n == 'td_connect': self._td_connect(cmd[1], cmd[2])
+        elif n == 'td_disconnect': self._td_disconnect()
+        elif n == 'td_tare': self._td_do_tare()
+        elif n == 'td_scale':
+            with self.lock: self.td_scale = cmd[1]
+
+    # ---------- 拉力变送器 ----------
+    def _td_connect(self, port, baud):
+        try:
+            td = TransducerModbus(port, baud=baud, channels=[1, 2], slave=1)
+            td.open()
+            hs = td.handshake()
+            if not any(hs.values()):
+                td.close(); self._push('❌ 变送器握手失败 (检查口/波特/接线)')
+                with self.lock: self.td_state = 'disconnected'
+                return
+            td.start_continuous(interval_ms=100)
+            self._td = td
+            with self.lock: self.td_state = 'connected'
+            self._push(f'✓ 拉力变送器连接 {port}')
+        except Exception as e:
+            self._td = None
+            with self.lock: self.td_state = 'disconnected'
+            self._push(f'❌ 变送器连接失败: {e}')
+
+    def _td_disconnect(self):
+        if self._td:
+            try: self._td.close()
+            except Exception: pass
+        self._td = None
+        with self.lock: self.td_state = 'disconnected'; self.live['thrust'] = 0.0
+        self._push('拉力变送器已断开')
+
+    def _td_do_tare(self):
+        with self.lock:
+            c1 = self.live['ch1']; c2 = self.live['ch2']
+            self.td_tare = abs(c1) + abs(c2)
+        self._push(f'拉力归零 (tare={self.td_tare:.0f} count)')
 
     def _do_connect(self, port, baud):
         try:
@@ -206,7 +271,7 @@ class FCWorker(threading.Thread):
         try:
             f = open(path,'w',newline='')
             f.write(f'# motor_test {datetime.now().isoformat()}\n')
-            f.write('# t_s,throttle_pct,state,voltage_v,current_a,power_w\n')
+            f.write('# t_s,throttle_pct,state,voltage_v,current_a,power_w,thrust,ch1_raw,ch2_raw\n')
             f.flush()
             self._logf = f; self._log_t0 = time.time(); self._last_write = 0.0
             with self.lock: self.rec_on=True; self.rec_path=path; self.rec_rows=0
@@ -218,7 +283,8 @@ class FCWorker(threading.Thread):
         lv = self.live
         try:
             self._logf.write(f'{now-self._log_t0:.3f},{lv["thr"]*100:.2f},{lv["state"]},'
-                             f'{lv["v"]:.3f},{lv["i"]:.3f},{lv["p"]:.2f}\n')
+                             f'{lv["v"]:.3f},{lv["i"]:.3f},{lv["p"]:.2f},'
+                             f'{lv["thrust"]:.2f},{lv["ch1"]:.0f},{lv["ch2"]:.0f}\n')
             self._logf.flush()
             if now - self._last_fsync > 1.0:
                 os.fsync(self._logf.fileno()); self._last_fsync = now
@@ -305,10 +371,26 @@ class App:
         self.log_btn = ttk.Button(lb, text='● 开始记录', command=self._toggle_log); self.log_btn.pack(side='left')
         self.log_lbl = ttk.Label(lf, text='未记录', foreground='gray'); self.log_lbl.pack(anchor='w', pady=2)
 
+        # 拉力变送器 (独立 Modbus 串口)
+        td = ttk.LabelFrame(left, text='拉力变送器 (Modbus, |ch1|+|ch2|)', padding=6); td.pack(fill='x', pady=4)
+        tdr = ttk.Frame(td); tdr.pack(fill='x')
+        ttk.Label(tdr, text='口:').pack(side='left')
+        self.td_port_cb = ttk.Combobox(tdr, width=12, values=self._ports())
+        usb = [p for p in self._ports() if 'USB' in p or 'ACM' in p]
+        self.td_port_cb.set(usb[-1] if usb else '')
+        self.td_port_cb.pack(side='left', padx=2)
+        self.td_btn = ttk.Button(tdr, text='连接', width=6, command=self._toggle_td); self.td_btn.pack(side='left', padx=3)
+        self.td_lbl = ttk.Label(td, text='● 未连接', foreground='gray'); self.td_lbl.pack(anchor='w', pady=2)
+        sr = ttk.Frame(td); sr.pack(fill='x')
+        ttk.Label(sr, text='标定 N/count:').pack(side='left')
+        self.scale_e = ttk.Entry(sr, width=10); self.scale_e.insert(0,'1.0'); self.scale_e.pack(side='left', padx=3)
+        ttk.Button(sr, text='应用', width=5, command=self._apply_scale).pack(side='left')
+        ttk.Button(sr, text='拉力归零', command=self.fc.cmd_td_tare).pack(side='left', padx=4)
+
         right = ttk.Frame(body, padding=4); right.pack(side='left', fill='both', expand=True)
         rd = ttk.LabelFrame(right, text='实时', padding=6); rd.pack(fill='x')
         self.big = {}
-        for idx,(k,lab) in enumerate([('thr','油门 %'),('v','电压 V'),('i','电流 A'),('p','功率 W'),('state','状态')]):
+        for idx,(k,lab) in enumerate([('thr','油门 %'),('v','电压 V'),('i','电流 A'),('p','功率 W'),('thrust','拉力 N'),('state','状态')]):
             f = ttk.Frame(rd); f.grid(row=0,column=idx,padx=10)
             ttk.Label(f, text=lab, foreground='gray').pack()
             l = ttk.Label(f, text='--', font=('TkDefaultFont',16,'bold')); l.pack()
@@ -337,6 +419,19 @@ class App:
             try: baud=int(self.baud_e.get())
             except ValueError: messagebox.showerror('错误','波特率无效'); return
             self.fc.cmd_connect(self.port_cb.get(), baud)
+
+    def _toggle_td(self):
+        if self.fc.snap()['td_state']=='connected':
+            self.fc.cmd_td_disconnect()
+        else:
+            port = self.td_port_cb.get()
+            if not port: messagebox.showerror('错误','选变送器串口'); return
+            self.fc.cmd_td_connect(port, 115200)
+
+    def _apply_scale(self):
+        try: s=float(self.scale_e.get())
+        except ValueError: messagebox.showerror('错误','标定系数无效'); return
+        self.fc.cmd_td_scale(s)
 
     def _mask(self):
         m=0
@@ -385,7 +480,14 @@ class App:
         self.big['v'].config(text=f'{lv["v"]:.2f}')
         self.big['i'].config(text=f'{lv["i"]:.1f}')
         self.big['p'].config(text=f'{lv["p"]:.0f}')
+        self.big['thrust'].config(text=f'{lv["thrust"]:.1f}')
         self.big['state'].config(text=STATE_NAME.get(lv['state'],'?'))
+        # 变送器状态
+        if s['td_state']=='connected':
+            self.td_lbl.config(text=f'● 已连接  ch1={lv["ch1"]:.0f} ch2={lv["ch2"]:.0f}', foreground='green')
+            self.td_btn.config(text='断开')
+        else:
+            self.td_lbl.config(text='● 未连接', foreground='gray'); self.td_btn.config(text='连接')
         # 记录状态
         if s['rec_on']:
             self.log_btn.config(text='■ 停止记录')
