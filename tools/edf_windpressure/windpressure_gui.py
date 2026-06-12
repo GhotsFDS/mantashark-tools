@@ -38,7 +38,7 @@ from pymavlink import mavutil
 from serial.tools import list_ports
 
 # 复用 CLI 的纯函数
-from windpressure_pc import parse_throttle, nv_name
+from windpressure_pc import parse_throttle, nv_name, app_dir
 
 # motor 号 → 名 (CLAUDE.md: SERVO1-12)
 MOTOR_NAMES = {1: 'SL1', 2: 'SL2', 3: 'SR1', 4: 'SR2', 5: 'DFL', 6: 'DFR',
@@ -428,7 +428,7 @@ class FCWorker(threading.Thread):
     def _write_csv(self):
         if not self.rec:
             return None
-        logs = os.path.join(os.path.dirname(__file__), 'logs')
+        logs = os.path.join(app_dir(), 'logs')
         os.makedirs(logs, exist_ok=True)
         stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         sps = '-'.join(str(round(x * 100)) for x in self._ts)

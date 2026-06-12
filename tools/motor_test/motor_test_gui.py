@@ -12,7 +12,7 @@
 依赖: pymavlink, pyserial, matplotlib(TkAgg), python3-pil.imagetk
 """
 from __future__ import annotations
-import collections, csv, os, queue, threading, time
+import collections, csv, os, queue, sys, threading, time
 from datetime import datetime
 
 import matplotlib; matplotlib.use('TkAgg')
@@ -27,6 +27,14 @@ MOTOR_NAMES = {1:'SL1',2:'SL2',3:'SR1',4:'SR2',5:'DFL',6:'DFR',
                7:'TL1',8:'TL2',9:'TR1',10:'TR2',11:'RDL',12:'RDR'}
 STATE_NAME = {0:'IDLE',1:'RAMP_UP',2:'HOLD',3:'RAMP_DN',4:'DONE'}
 LOG_HZ = 20.0
+
+
+def app_dir():
+    """日志落盘目录: 打包(frozen)用 exe 所在目录, 源码用脚本目录。
+    (PyInstaller onefile 下 __file__ 指向临时解压目录, 退出即删 → 必须用 sys.executable)"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 def nv_name(msg):
@@ -202,7 +210,7 @@ class FCWorker(threading.Thread):
             f.flush()
             self._logf = f; self._log_t0 = time.time(); self._last_write = 0.0
             with self.lock: self.rec_on=True; self.rec_path=path; self.rec_rows=0
-            self._push(f'● 开始记录: {os.path.basename(path)}')
+            self._push(f'● 开始记录: {path}')
         except Exception as e:
             self._push(f'❌ 记录打开失败:{e}')
 
@@ -224,8 +232,8 @@ class FCWorker(threading.Thread):
             except Exception: pass
         self._logf = None
         with self.lock:
-            n = self.rec_rows; self.rec_on=False
-        self._push(f'■ 停止记录 ({n} 行已保存)')
+            n = self.rec_rows; self.rec_on=False; p = self.rec_path
+        self._push(f'■ 停止记录 ({n} 行已保存) → {p}')
 
     # ---------- 断开 / 失联 ----------
     def _do_disconnect(self):
@@ -357,9 +365,10 @@ class App:
         if self.fc.snap()['rec_on']:
             self.fc.cmd_log_stop()
         else:
-            os.makedirs(os.path.join(os.path.dirname(__file__),'logs'), exist_ok=True)
+            logs_dir = os.path.join(app_dir(), 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
             stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            path = os.path.join(os.path.dirname(__file__),'logs',f'motor_{stamp}.csv')
+            path = os.path.join(logs_dir, f'motor_{stamp}.csv')
             self.fc.cmd_log_start(path)
 
     def _refresh(self):

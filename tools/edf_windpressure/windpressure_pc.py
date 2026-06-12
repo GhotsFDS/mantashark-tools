@@ -23,6 +23,14 @@ from pymavlink import mavutil
 STATE_NAME = {0: 'IDLE', 1: 'RAMP_UP', 2: 'HOLD', 3: 'RAMP_DN', 4: 'DONE'}
 
 
+def app_dir():
+    """日志落盘目录: 打包(frozen)用 exe 所在目录, 源码用脚本目录。
+    PyInstaller onefile 下 __file__ 指向临时解压目录, 退出即删 → 必须用 sys.executable。"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def motors_to_mask(s: str) -> int:
     mask = 0
     for tok in s.split(','):
@@ -205,9 +213,9 @@ def main():
 
         # ---- 写 CSV ----
         if not args.out:
-            os.makedirs(os.path.join(os.path.dirname(__file__), 'logs'), exist_ok=True)
+            os.makedirs(os.path.join(app_dir(), 'logs'), exist_ok=True)
             stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            args.out = os.path.join(os.path.dirname(__file__), 'logs',
+            args.out = os.path.join(app_dir(), 'logs',
                                     f'wp_{stamp}_M{args.motors.replace(",", "-")}_thr{int(thr*100)}.csv')
         with open(args.out, 'w', newline='') as f:
             f.write(f'# edf_windpressure  {datetime.now().isoformat()}\n')
