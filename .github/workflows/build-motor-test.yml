@@ -1,0 +1,139 @@
+name: Build Motor Test EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/motor_test/**'
+      - '.github/workflows/build-motor-test.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller matplotlib pillow
+
+      - name: Build motor_test_gui.exe (GUI)
+        run: |
+          cd tools/motor_test
+          pyinstaller --onefile `
+            --name motor_test_gui `
+            --windowed `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.dialects.v20.common `
+            --hidden-import serial `
+            --hidden-import tkinter `
+            --hidden-import matplotlib.backends.backend_tkagg `
+            --hidden-import PIL.ImageTk `
+            --hidden-import PIL._tkinter_finder `
+            --collect-submodules pymavlink `
+            --noconfirm `
+            motor_test_gui.py
+
+      - name: Verify build
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          cd tools/motor_test
+          dir dist
+          if (Test-Path "dist\motor_test_gui.exe") {
+            $size = (Get-Item "dist\motor_test_gui.exe").Length / 1MB
+            Write-Host ("OK motor_test_gui.exe: {0:N1} MB" -f $size)
+          } else { throw "motor_test_gui.exe not found" }
+
+      - name: Upload motor_test_gui artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: motor_test_gui-windows
+          path: tools/motor_test/dist/motor_test_gui.exe
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/motor_test/dist/motor_test_gui.exe
+            tools/motor_test/motor_test.lua
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install system tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller matplotlib pillow
+
+      - name: Build motor_test_gui (Linux GUI)
+        run: |
+          cd tools/motor_test
+          pyinstaller --onefile \
+            --name motor_test_gui \
+            --hidden-import pymavlink.dialects.v20.ardupilotmega \
+            --hidden-import pymavlink.dialects.v20.common \
+            --hidden-import serial \
+            --hidden-import tkinter \
+            --hidden-import matplotlib.backends.backend_tkagg \
+            --hidden-import PIL.ImageTk \
+            --hidden-import PIL._tkinter_finder \
+            --collect-submodules pymavlink \
+            --noconfirm \
+            motor_test_gui.py
+
+      - name: Verify build
+        run: |
+          cd tools/motor_test
+          ls -la dist/
+          test -f dist/motor_test_gui && echo "OK Linux motor_test_gui built"
+
+      - name: Upload motor_test_gui artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: motor_test_gui-linux
+          path: tools/motor_test/dist/motor_test_gui
+          retention-days: 30
+
+      - name: Upload FC lua script
+        uses: actions/upload-artifact@v7
+        with:
+          name: motor_test-lua
+          path: tools/motor_test/motor_test.lua
+          retention-days: 30
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/motor_test/dist/motor_test_gui
+            tools/motor_test/motor_test.lua
