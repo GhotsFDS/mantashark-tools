@@ -46,7 +46,7 @@ TABS = {
         ('MSAK_FOIL_EN', 'EN 高度控制器(总开关)', 0, 1, 1, 'check'),
         ('MSAK_FOIL_TRM', 'trim 托重基线', 0, 1, 0.01),
         ('MSAK_FOIL_NEG', '负下限(0=不下压)', -0.5, 0, 0.01),
-        ('MSAK_FOIL_TGT', '目标离水高 m', 0, 1, 0.01),
+        ('MSAK_FOIL_TGT', '目标高(0位之上)m', 0, 1, 0.01),
         ('MSAK_FOIL_TLT', '安装基准俯仰°', -20, 20, 0.5),
         ('MSAK_FOIL_TAU', '互补滤波τ s', 0.1, 3, 0.05),
         ('MSAK_FOIL_GATE', 'innovation门限 m', 0, 1, 0.01),
@@ -67,7 +67,7 @@ class Mav(threading.Thread):
         super().__init__(daemon=True)
         self.device, self.baud = device, baud
         self.pending = {}; self.lock = threading.Lock()
-        self.params = {}; self.tlm = {'servo': [None]*12, 'rngfnd': None}
+        self.params = {}; self.tlm = {'servo': [None]*12, 'rngfnd': None, 'rngfnd_v': None}
         self.connected = False; self.params_loaded = False; self.err = None; self._stop = False
 
     def set(self, name, val):
@@ -110,6 +110,7 @@ class Mav(threading.Thread):
                     self.tlm['servo'] = [getattr(msg, 'servo%d_raw' % i, None) for i in range(1, 13)]
                 elif t == 'RANGEFINDER':
                     self.tlm['rngfnd'] = msg.distance * 1000.0
+                    self.tlm['rngfnd_v'] = getattr(msg, 'voltage', 0.0) or 0.0
             if not self.params_loaded and (len(self.params) >= len(PARAMS) or time.time()-t0 > 5):
                 self.params_loaded = True
             time.sleep(0.05)
