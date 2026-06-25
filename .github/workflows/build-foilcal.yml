@@ -1,0 +1,127 @@
+name: Build Foil Calibration EXE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/foil_calibration/**'
+      - '.github/workflows/build-foilcal.yml'
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller
+      - name: Build foil_cal_gui.exe (GUI)
+        run: |
+          cd tools/foil_calibration
+          pyinstaller --onefile `
+            --name foil_cal_gui `
+            --windowed `
+            --hidden-import pymavlink.dialects.v20.ardupilotmega `
+            --hidden-import pymavlink.dialects.v20.common `
+            --hidden-import serial `
+            --hidden-import tkinter `
+            --collect-submodules pymavlink `
+            --noconfirm `
+            foil_cal_gui.py
+      - name: Build CLI exes
+        run: |
+          cd tools/foil_calibration
+          foreach ($s in 'fc_rangefinder','foil_cal','dm858_distance') {
+            pyinstaller --onefile --name $s `
+              --hidden-import pymavlink.dialects.v20.ardupilotmega `
+              --hidden-import pymavlink.dialects.v20.common `
+              --hidden-import serial `
+              --collect-submodules pymavlink `
+              --noconfirm `
+              "$s.py"
+          }
+      - name: Verify
+        run: |
+          cd tools/foil_calibration
+          dir dist
+          foreach ($e in 'foil_cal_gui','fc_rangefinder','foil_cal','dm858_distance') {
+            if (-not (Test-Path "dist\$e.exe")) { throw "$e.exe not found" }
+            $mb = (Get-Item "dist\$e.exe").Length / 1MB
+            Write-Host ("OK $e.exe: {0:N1} MB" -f $mb)
+          }
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: foil_calibration-windows
+          path: tools/foil_calibration/dist/*.exe
+          retention-days: 30
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tools/foil_calibration/dist/*.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install system tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymavlink pyserial pyinstaller
+      - name: Build all (Linux)
+        run: |
+          cd tools/foil_calibration
+          for s in foil_cal_gui fc_rangefinder foil_cal dm858_distance; do
+            pyinstaller --onefile --name "$s" \
+              --hidden-import pymavlink.dialects.v20.ardupilotmega \
+              --hidden-import pymavlink.dialects.v20.common \
+              --hidden-import serial \
+              --hidden-import tkinter \
+              --collect-submodules pymavlink \
+              --noconfirm \
+              "$s.py"
+          done
+      - name: Verify
+        run: |
+          cd tools/foil_calibration
+          ls -la dist/
+          for e in foil_cal_gui fc_rangefinder foil_cal dm858_distance; do
+            test -f "dist/$e" && echo "OK Linux $e built" || exit 1
+          done
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: foil_calibration-linux
+          path: |
+            tools/foil_calibration/dist/foil_cal_gui
+            tools/foil_calibration/dist/fc_rangefinder
+            tools/foil_calibration/dist/foil_cal
+            tools/foil_calibration/dist/dm858_distance
+          retention-days: 30
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tools/foil_calibration/dist/foil_cal_gui
+            tools/foil_calibration/dist/fc_rangefinder
+            tools/foil_calibration/dist/foil_cal
+            tools/foil_calibration/dist/dm858_distance
