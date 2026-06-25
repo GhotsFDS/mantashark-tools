@@ -94,11 +94,53 @@ class GUI:
         root.after(150, self._refresh)
         root.protocol('WM_DELETE_WINDOW', self._on_close)
 
+    # 飞控强信号: ArduPilot USB VID=1209 / 厂商名 (命中才自动连, 防误连普通 USB-serial)
+    FC_STRONG = ('1209', 'ardupilot', 'cuav', 'px4', 'pixhawk')
+
+    def _scan_ports(self, auto_connect=False):
+        ports = []
+        try:
+            from serial.tools import list_ports
+            ports = list(list_ports.comports())
+        except Exception:
+            pass
+        items, best = [], None
+        for p in ports:
+            # 滤掉 Linux ttyS* 幽灵口 (desc='n/a' 无 USB): 只留 USB/有真实描述的 (Win 的 COMx 自带描述)
+            hwid = (p.hwid or '').lower()
+            desc = (p.description or '').lower()
+            is_real = ('usb' in hwid or 'acm' in p.device.lower()
+                       or (desc and desc != 'n/a'))
+            if not is_real:
+                continue
+            items.append(p.device)
+            blob = '%s %s %s %s' % (p.device.lower(), desc,
+                                    (getattr(p, 'manufacturer', '') or '').lower(), hwid)
+            if best is None and any(k in blob for k in self.FC_STRONG):  # 强信号才认飞控
+                best = p.device
+        self.port_cb['values'] = items
+        cur = self.dev_var.get().strip()
+        if best:
+            self.dev_var.set(best)              # 飞控强信号 → 选中 + (auto 时) 自动连
+        elif items and cur not in items:
+            self.dev_var.set(items[0])          # 否则选第一个真口, 不自动连
+        # 状态提示
+        if best:
+            self.status.config(text='识别 %d 口 → 飞控 %s (自动连)' % (len(items), best), foreground='blue')
+        elif items:
+            self.status.config(text='识别 %d 口, 未确认飞控 (选口→连接)' % len(items), foreground='orange')
+        else:
+            self.status.config(text='未发现串口 (手填 COMx →连接)', foreground='gray')
+        if auto_connect and best:               # 仅强信号自动连
+            self._connect()
+
     def _connect(self):
         if self.mav:
             self.mav.stop()
         self.populated = False
         self.device = self.dev_var.get().strip()
+        if not self.device:
+            return
         self.mav = Mav(self.device, self.baud)
         self.mav.start()
 
@@ -108,14 +150,17 @@ class GUI:
 
     def _build(self):
         pad = dict(padx=4, pady=2)
-        # 连接栏 (端口可选, 打包 exe 用)
+        # 连接栏: 端口下拉(可编辑) + 刷新 + 连接
         cb = ttk.Frame(self.root); cb.grid(row=0, column=0, columnspan=4, sticky='w', **pad)
         ttk.Label(cb, text='端口').pack(side='left')
         self.dev_var = tk.StringVar(value=self.device)
-        ttk.Entry(cb, textvariable=self.dev_var, width=16).pack(side='left', padx=4)
-        ttk.Button(cb, text='连接', command=self._connect).pack(side='left')
+        self.port_cb = ttk.Combobox(cb, textvariable=self.dev_var, width=22, values=[])
+        self.port_cb.pack(side='left', padx=4)
+        ttk.Button(cb, text='刷新', width=5, command=self._scan_ports).pack(side='left')
+        ttk.Button(cb, text='连接', width=5, command=self._connect).pack(side='left')
         self.status = ttk.Label(cb, text='未连接', foreground='gray')
         self.status.pack(side='left', padx=8)
+        self._scan_ports(auto_connect=True)        # 启动识别 + 命中飞控自动连
 
         # ── 机械校准 ──
         mf = ttk.LabelFrame(self.root, text='机械校准 (disarmed)')
