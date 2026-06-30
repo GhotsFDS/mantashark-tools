@@ -3,7 +3,7 @@ import { useStore } from './store/useStore';
 import { gcs, GcsMessage } from './lib/gcs';
 import { quantize, DEFAULT_PARAMS, SYNC_SKIP_RE } from './lib/defaults';
 import { Wifi, WifiOff } from 'lucide-react';
-import { Waves, Sliders, Grid3x3, Settings, PlugZap, FileSearch, Satellite, Bot, LineChart, MapPin, Compass } from 'lucide-react';
+import { Waves, Sliders, Grid3x3, Settings, PlugZap, FileSearch, Satellite, Bot, LineChart, MapPin, Compass, Gauge } from 'lucide-react';
 import { FlightProfile } from './components/tabs/FlightProfile';
 import { Tilts } from './components/tabs/Tilts';
 import { Geometry } from './components/tabs/Geometry';
@@ -13,6 +13,7 @@ import { LogAnalysis } from './components/tabs/LogAnalysis';
 import { RtkSetup } from './components/tabs/RtkSetup';
 import { Auto } from './components/tabs/Auto';
 import { GroundTest } from './components/tabs/GroundTest';
+import { Bench } from './components/tabs/Bench';
 import { Plot } from './components/tabs/Plot';
 import { YawTune } from './components/tabs/YawTune';
 import { Map } from './components/tabs/Map';
@@ -22,6 +23,7 @@ const TABS = [
   { id: 'gcs',       label: 'GCS',          Icon: PlugZap },
   { id: 'auto',      label: '模式配置',     Icon: Bot },
   { id: 'gtest',     label: '地面测试',     Icon: Grid3x3 },
+  { id: 'bench',     label: '台架测力',     Icon: Gauge },
   { id: 'profile',   label: '控制律',       Icon: Waves },
   { id: 'tilts',     label: '舵机标定',     Icon: Sliders },
   { id: 'plot',      label: '实时曲线',     Icon: LineChart },
@@ -164,6 +166,7 @@ export default function App() {
       case 'gcs':       return <Gcs />;
       case 'auto':      return <Auto />;
       case 'gtest':     return <GroundTest />;
+      case 'bench':     return <Bench />;
       case 'profile':   return <FlightProfile />;
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry />;

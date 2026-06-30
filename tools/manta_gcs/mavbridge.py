@@ -82,6 +82,14 @@ except ImportError:
     RtkManager = None
     print('[WARN] rtk.py 缺失, RTK 功能不可用')
 
+# 台架动力测试 manager (modbus 力+电流 + profile 矩阵引擎)
+try:
+    from bench import BenchManager, profile_list as bench_profile_list
+except ImportError as _be:
+    BenchManager = None
+    bench_profile_list = lambda: []
+    print(f'[WARN] bench.py 缺失 ({_be}), 台架测试不可用')
+
 # v9 P4 LOG analyzer (lib local, 同目录)
 try:
     sys.path.insert(0, SCRIPT_DIR)
@@ -226,16 +234,22 @@ class Bridge:
         # 电池缓存 — ArduPilot BATTERY_STATUS 偶尔发 current=-1 (该帧未读到), 保持上次有效值防跳变
         self.last_battery_current = None
         self.last_battery_voltage = 0
+        # P0 修: 双电池电压缓存 (id→V). 用户左右分路 L/R 各一块电池, 飞控发两个 BATTERY_STATUS.
+        # raw 重构后 last_battery_voltage 不再更新(死缓存) → bench 功率恒0. 这里重新缓存.
+        self.batt_voltages = {}   # {battery_id: voltage_V}
+        self.fc_params = {}    # 飞控 param 缓存 (收 PARAM_VALUE 存; bench 读 TLT_ 限位用)
         self.last_battery_remaining = -1
         self.last_battery_consumed = 0
         # RTK manager (lazy init after FC connect, needs mav handle)
         self.rtk = None
+        # 台架测试 manager (lazy init after FC connect)
+        self.bench = None
 
     def connect_mav(self):
         print(f'[bridge] 连 FC: {self.device} @ {self.baud}')
         # 必须用 MAVLink v2 dialect (ardupilotmega): SERVO_OUTPUT_RAW 后 8 路 (servo9..16_raw)
         # 是 v2 extension 字段, v1 默认会丢. 不设 dialect 时 ArduPilot 4.7 默认 v2 但保险显式给.
-        os.environ.setdefault('MAVLINK20', '1')
+        os.environ['MAVLINK20'] = '1'   # P3: 强制 v2 (18ch RC override 需要)
         self.mav = mavutil.mavlink_connection(self.device, baud=self.baud, dialect='ardupilotmega')
         print('[bridge] 等 HEARTBEAT...')
         m = self.mav.wait_heartbeat(timeout=8)
@@ -268,6 +282,15 @@ class Bridge:
                 on_inject=lambda d: self._broadcast_thread('rtk_inject', d),
                 backup_dir=os.path.normpath(backup_dir),
             )
+        # 台架 manager lazy init
+        if BenchManager is not None:
+            self.bench = BenchManager(
+                self.mav,
+                emit=self._broadcast_thread,
+                get_voltage=lambda: self.last_battery_voltage,
+                get_battery=lambda: dict(self.batt_voltages),   # P0: 双电池 {id:V}
+                get_param=lambda n: self.fc_params.get(n),
+            )
 
     def _broadcast_thread(self, type_str, data_dict):
         """Thread-safe broadcast helper for RTK callbacks (called from RTK reader thread)."""
@@ -293,6 +316,31 @@ class Bridge:
                     pass
             t = m.get_type()
             data = None
+
+            # param 缓存 (bench 读 TLT_ 软件限位用; 不影响 raw 透传)
+            if t == 'PARAM_VALUE':
+                try:
+                    self.fc_params[m.param_id.strip('\x00')] = m.param_value
+                except Exception:
+                    pass
+            # P0 修: 双电池电压缓存 (bench 功率用; raw 透传不冲突, 跟 param 缓存同模式)
+            elif t == 'BATTERY_STATUS':
+                try:
+                    cells = [c for c in (m.voltages or []) if 0 < c < 65535][:10]
+                    if cells:
+                        v = sum(cells) / 1000.0
+                        self.batt_voltages[int(m.id)] = v
+                        self.last_battery_voltage = v   # 兼容旧单电压用法
+                except Exception:
+                    pass
+            elif t == 'SYS_STATUS':
+                try:
+                    if m.voltage_battery > 0:
+                        v = m.voltage_battery / 1000.0
+                        self.batt_voltages.setdefault(0, v)
+                        self.last_battery_voltage = v
+                except Exception:
+                    pass
 
             # ═══ 纯 raw 透传架构: 遥测一律 {type:'mav', mt, f}, GCS 自己解析 ═══
             # 保留服务端必须处理的: mission 协议状态机 (RPC 支持) / RTK rover tap / STATUSTEXT utf-8.
@@ -598,6 +646,55 @@ class Bridge:
                                                        'name': pname, 'err': str(ex)}))
                     await ws.send(json.dumps({'type': 'pid_apply_done',
                                                'count': len(params_to_set)}))
+                # ── 台架动力测试 ──
+                elif t == 'bench_profiles':
+                    await ws.send(json.dumps({'type': 'bench_profiles',
+                                              'profiles': bench_profile_list()}))
+                elif t == 'bench_connect':
+                    if self.bench:
+                        fp = req.get('force_port', ''); cp = req.get('curr_port', fp)
+                        baud = int(req.get('baud', 115200))
+                        # P2: 串口 open+handshake 阻塞 1-2s, 用 executor 避免冻结 asyncio 事件循环(WS)
+                        asyncio.get_event_loop().run_in_executor(
+                            None, self.bench.connect_sensors, fp, cp, baud)
+                    else:
+                        await ws.send(json.dumps({'type':'bench_status','error':'bench 不可用'}))
+                elif t == 'bench_disconnect':
+                    if self.bench:
+                        asyncio.get_event_loop().run_in_executor(None, self.bench.disconnect_sensors)
+                elif t == 'bench_tare':
+                    if self.bench: self.bench.tare_force()
+                elif t == 'bench_cal':
+                    if self.bench: self.bench.set_cal(req.get('cal') or {})
+                elif t == 'bench_start':
+                    if self.bench:
+                        self.bench.start(req.get('profile', 'P0'),
+                                         thr_min=float(req.get('thr_min', 0.5)),
+                                         thr_max=float(req.get('thr_max', 0.8)),
+                                         step=float(req.get('step', 0.1)),
+                                         hold=float(req.get('hold', 3.0)),
+                                         ramp=float(req.get('ramp', 1.5)),
+                                         ang_step=float(req.get('ang_step', 15.0)),
+                                         ge_plate=str(req.get('ge_plate', 'na')),
+                                         mount_deg=float(req.get('mount_deg', 0.0)),
+                                         note=str(req.get('note', '')))
+                elif t == 'bench_estimate':
+                    if self.bench:
+                        self.bench.estimate(req.get('profile', 'P0'),
+                                            float(req.get('thr_min', 0.5)), float(req.get('thr_max', 0.8)),
+                                            float(req.get('step', 0.1)), float(req.get('hold', 3.0)),
+                                            float(req.get('ramp', 1.5)), float(req.get('ang_step', 15.0)))
+                elif t == 'bench_stop':
+                    if self.bench: self.bench.stop()
+                elif t == 'bench_abort':
+                    if self.bench: self.bench.abort()
+                elif t == 'bench_list_ports':
+                    try:
+                        ports = [{'device': d, 'description': desc}
+                                 for d, desc in scan_serial_ports()]
+                        await ws.send(json.dumps({'type':'bench_ports','ports':ports}))
+                    except Exception as ex:
+                        await ws.send(json.dumps({'type':'bench_ports','error':str(ex)}))
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:

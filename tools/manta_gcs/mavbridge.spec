@@ -28,14 +28,19 @@ hiddenimports += [
     # 同目录本地模块 (PyInstaller 不会自动打包 import xxx 语法的本地 .py)
     'log_analysis',
     'rtk',
+    # 台架 bench 后端 (已收进 manta_gcs 本目录, 地面站自包含, 不再依赖 motor_test).
+    'bus485',
+    'transducer_modbus',
+    'current_meter_modbus',
+    'profiles',
+    'sign_check',
 ]
 
-# PyInstaller 跑 spec 时 cwd 是 spec 文件所在目录. 但 Analysis 默认不
-# 把这个目录加进 module 搜索路径. 必须用 pathex=['.'] 显式给, hiddenimports
-# 里的 log_analysis/rtk 才能解析到同目录 .py.
+# PyInstaller 跑 spec 时 cwd 是 spec 文件所在目录. pathex=['.'] 让它能解析
+# 同目录所有本地 .py (log_analysis/rtk/bench/bus485/profiles/sign_check/*modbus).
 a = Analysis(
     ['mavbridge.py'],
-    pathex=['.'],   # 让 PyInstaller 在 spec 目录找本地 .py (log_analysis, rtk)
+    pathex=['.'],
     binaries=[],
     datas=[
         # 关键: 直接把 .py 当 data 嵌入 EXE bundle (运行时在 sys._MEIPASS).
@@ -44,6 +49,12 @@ a = Analysis(
         # mavbridge.py 启动时把 sys._MEIPASS 加进 sys.path 让 import 能找到.
         ('log_analysis.py', '.'),
         ('rtk.py', '.'),
+        # 台架 bench 后端 (本目录, 地面站自包含)
+        ('bus485.py', '.'),
+        ('transducer_modbus.py', '.'),
+        ('current_meter_modbus.py', '.'),
+        ('profiles.py', '.'),
+        ('sign_check.py', '.'),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],

@@ -23,6 +23,14 @@ export type GcsMessage =
   | { type: 'rtk_inject'; frames: number; bytes: number; msg_types: Record<string, number>; bps_in?: number; bps_useful?: number }
   | { type: 'rtk_ports'; ports?: { device: string; description: string; manufacturer: string; vid: number | null; pid: number | null }[]; error?: string }
   | { type: 'rtk_sourcetable'; entries?: { mountpoint: string; identifier: string; format: string; format_details: string; carrier: string; nav_system: string; country: string }[]; error?: string }
+  | { type: 'bench_profiles'; profiles: { key: string; name: string; desc: string; points: number }[] }
+  | { type: 'bench_status'; msg?: string; error?: string; connected?: boolean; running?: boolean; force_ok?: number; curr_ok?: number; csv?: string; est_sec?: number }
+  | { type: 'bench_live'; force_g: Record<string, number | null>; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; current: Record<string, number>; i_total: number; volt_L: number; volt_R: number; power: number }
+  | { type: 'bench_sample'; force_g: Record<string, number | null>; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; current: Record<string, number>; i_total: number; volt_L: number; volt_R: number; power: number }
+  | { type: 'bench_point'; idx: number; total: number; profile: string; label: string; angle_idx: number; angle_total: number; thr_pct: number; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; volt_L: number; volt_R: number; i_total: number; power: number; elapsed_sec: number; remain_sec: number }
+  | { type: 'bench_done'; profile: string; aborted: boolean; stopped?: boolean; csv: string }
+  | { type: 'bench_estimate'; profile: string; total_angles: number; ladder_n: number; total_steps: number; est_sec: number; cfg_kind: 'angle' | 'fixed' | 'mixed'; n_sweep: number; n_fixed: number; detail: string }
+  | { type: 'bench_ports'; ports?: { device: string; description: string }[]; error?: string }
   | { type: 'error'; msg: string };
 
 type Listener = (m: GcsMessage) => void;
@@ -249,6 +257,25 @@ export class GcsClient {
   rtkNtripSourcetable(host: string, port: number) {
     this.send({ type: 'rtk_ntrip_sourcetable', host, port });
   }
+
+  // ─── 台架动力测试 ───
+  benchProfiles() { this.send({ type: 'bench_profiles' }); }
+  benchListPorts() { this.send({ type: 'bench_list_ports' }); }
+  benchConnect(force_port: string, curr_port: string, baud = 115200) {
+    this.send({ type: 'bench_connect', force_port, curr_port, baud });
+  }
+  benchDisconnect() { this.send({ type: 'bench_disconnect' }); }
+  benchTare() { this.send({ type: 'bench_tare' }); }
+  benchCal(cal: Record<number, number>) { this.send({ type: 'bench_cal', cal }); }
+  benchStart(profile: string, thr_min = 0.5, thr_max = 0.8, step = 0.1, hold = 3.0, ramp = 1.5, ang_step = 15,
+             ge_plate = 'na', mount_deg = 0, note = '') {
+    this.send({ type: 'bench_start', profile, thr_min, thr_max, step, hold, ramp, ang_step, ge_plate, mount_deg, note });
+  }
+  benchEstimate(profile: string, thr_min: number, thr_max: number, step: number, hold: number, ramp: number, ang_step: number) {
+    this.send({ type: 'bench_estimate', profile, thr_min, thr_max, step, hold, ramp, ang_step });
+  }
+  benchStop() { this.send({ type: 'bench_stop' }); }
+  benchAbort() { this.send({ type: 'bench_abort' }); }
 
   isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }
 
