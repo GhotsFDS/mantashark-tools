@@ -20,13 +20,14 @@ interface Props {
 // 软限位不映射到 500-2500, 仅做 offset 截断, 输出 PWM 是真实物理值. 超限锁限位 PWM.
 export function TiltPanel({ t }: Props) {
   const { params, tiltPreview, setParam, setTiltPreview, simulateArmed, globalPreviewMode } = useStore();
-  const zeroKey = `TLT_${t.alias}_ZERO`;
-  const dirKey  = `TLT_${t.alias}_DIR`;
-  const lminKey = `TLT_${t.alias}_LMIN`;   // 偏移量下界 (任意, LMIN ≤ LMAX)
-  const lmaxKey = `TLT_${t.alias}_LMAX`;   // 偏移量上界 (任意, 区间不一定跨 0)
-  const goalKey = `TLT_${t.alias}_GOAL`;   // ATC fb 静态中性位 (body abs deg)
-  const bwKey   = `TLT_${t.alias}_BW`;     // ATC fb 带宽倍率 (clamp [0.1, 5.0] in lua)
-  const ovrKey  = `TLT_${t.alias}_PRV`;
+  const px = t.param_prefix || 'TLT_';
+  const zeroKey = `${px}${t.alias}_ZERO`;
+  const dirKey  = `${px}${t.alias}_DIR`;
+  const lminKey = `${px}${t.alias}_LMIN`;   // 偏移量下界 (任意, LMIN ≤ LMAX)
+  const lmaxKey = `${px}${t.alias}_LMAX`;   // 偏移量上界 (任意, 区间不一定跨 0)
+  const goalKey = `${px}${t.alias}_GOAL`;   // ATC fb 静态中性位 (body abs deg)
+  const bwKey   = `${px}${t.alias}_BW`;     // ATC fb 带宽倍率 (clamp [0.1, 5.0] in lua)
+  const ovrKey  = `${px}${t.alias}_PRV`;
   const zero = params[zeroKey];
   const dir = params[dirKey];
   const lminOff = params[lminKey] ?? -45;

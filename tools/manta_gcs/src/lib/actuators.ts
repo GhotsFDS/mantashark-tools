@@ -41,8 +41,8 @@ export const TILTS: TiltConfig[] = [
   { id:'RDL',          alias:'RDL',  range:[15, 45], servo_ch:17, is_group:false },
   { id:'RDR',          alias:'RDR',  range:[15, 45], servo_ch:18, is_group:false },
   // P7.9.28: TL2/TR2 — 硬件已装 (SERVO20/21), 不接 orchestrator (锁 GOAL=90°). 5 参数 (跳 PRV/BW)
-  { id:'TL2',          alias:'TL2',  range:[ 0, 90], servo_ch:20, is_group:false, no_atc_fb:true },
-  { id:'TR2',          alias:'TR2',  range:[ 0, 90], servo_ch:21, is_group:false, no_atc_fb:true },
+  { id:'TL2',          alias:'TL2',  range:[ 0, 90], servo_ch:20, is_group:false, param_prefix:'TLT2_' },
+  { id:'TR2',          alias:'TR2',  range:[ 0, 90], servo_ch:21, is_group:false, param_prefix:'TLT2_' },
 ];
 
 export const TILT_NEUTRAL_ABS_DEG = 45.0;

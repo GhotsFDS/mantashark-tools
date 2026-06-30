@@ -22,6 +22,7 @@ export interface TiltConfig {
   servo_ch: number;
   is_group: boolean;
   no_atc_fb?: boolean;   // P7.9.28: TL2/TR2 不接 orchestrator ATC fb, 跳过 BW/PRV 渲染
+  param_prefix?: string;   // 参数表前缀, 默认 'TLT_'; TL2/TR2 用 'TLT2_' (独立表)
 }
 
 export interface PhaseConfig {

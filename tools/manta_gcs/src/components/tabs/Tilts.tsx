@@ -24,7 +24,7 @@ export function Tilts() {
       const batch: Record<string, number> = {};
       for (const t of TILTS) {
         if (t.no_atc_fb) continue;   // TL2/TR2 没 PRV
-        const ovrKey = `TLT_${t.alias}_PRV`;
+        const ovrKey = `${t.param_prefix || 'TLT_'}${t.alias}_PRV`;
         const g1Key  = `TLT_${t.alias}_G1`;
         // 优先用 store 实测值, 否则用 DEFAULT_PARAMS (各路 G1 默认不一致, 不能写死 45)
         const g1Val  = params[g1Key] ?? DEFAULT_PARAMS[g1Key] ?? 45;
