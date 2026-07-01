@@ -270,7 +270,7 @@ class BenchManager:
             if sp.sweep:
                 lim = self._read_body_limit(sp.sweep[0])   # 同舵机第二次走缓存, 快
                 if lim:
-                    n = len(self._ladder(lim[0], lim[1], ang_step))
+                    n = len(self._angle_ladder(lim[0], lim[1], ang_step))
                     detail.append(f'{ID2ALIAS.get(sp.sweep[0], sp.sweep[0])}[{lim[0]:.0f}-{lim[1]:.0f}°]×{n}角')
                 else:
                     n = 1; detail.append(f'{sp.label}(限位读不到→1)')
@@ -302,6 +302,15 @@ class BenchManager:
             steps.append(round(t, 3)); t += step
         return steps
 
+    # 角度扫描专用: 在 _ladder 基础上保证真实 min(lo, 本就是起点) 和 max(hi) 端点都扫到.
+    # step 不整除 (lo..hi) 时, _ladder 末点会 < hi → 补上 hi. 供 _angle_grid + estimate 共用一致.
+    @staticmethod
+    def _angle_ladder(lo, hi, step):
+        grid = BenchManager._ladder(lo, hi, step)
+        if grid and grid[-1] < hi - 1e-6:
+            grid.append(round(hi, 3))
+        return grid
+
     # 读舵机 body 软件限位 [LMIN+45, LMAX+45] (从飞控 TLT_<alias>_LMIN/LMAX 缓存)
     def _read_body_limit(self, sid, timeout=2.5):
         alias = ID2ALIAS.get(sid, sid)
@@ -331,16 +340,15 @@ class BenchManager:
             self.emit('bench_status', {'msg': f'⚠ {sp.sweep[0]} 限位读不到, 用 GOAL 单点'})
             return [None]
         lo, hi = lim
-        # 物理包络 (body deg): 超出 = 飞控限位未标定到机械极限, 收窄并告警 (防顶死/吹尾)
+        # 软限位 = 机械限位 (用户校准权威, 见 feedback_soft_limit_is_mechanical):
+        # 扫描直接跟 [LMIN+45, LMAX+45], 不再软件二次钳. 你校 SGRP 到 body 0 就扫到 0.
+        # PHYS_ENVELOPE 仅作 sanity 告警 (限位像未标定的默认值/超参考范围时提醒), 不砍范围.
         env = PHYS_ENVELOPE.get(sp.sweep[0])
-        if env:
-            clo, chi = max(lo, env[0]), min(hi, env[1])
-            if clo > lo + 0.5 or chi < hi - 0.5:
-                self.emit('bench_status', {'msg':
-                    f'⚠ {ID2ALIAS.get(sp.sweep[0],sp.sweep[0])} 限位[{lo:.0f},{hi:.0f}]超物理包络'
-                    f'[{env[0]},{env[1]}], 已收窄到[{clo:.0f},{chi:.0f}](飞控限位未标定?)'})
-            lo, hi = clo, chi
-        return self._ladder(lo, hi, ang_step)
+        if env and (lo < env[0] - 0.5 or hi > env[1] + 0.5):
+            self.emit('bench_status', {'msg':
+                f'⚠ {ID2ALIAS.get(sp.sweep[0],sp.sweep[0])} 限位[{lo:.0f},{hi:.0f}]超参考包络'
+                f'[{env[0]},{env[1]}] — 已校准可忽略; 未校准请先标 LMIN/LMAX 再扫 (防扫进止档)'})
+        return self._angle_ladder(lo, hi, ang_step)
 
     def _run_loop(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step):
         prof = PROFILES[profile_key]
