@@ -166,14 +166,14 @@ export default function App() {
       case 'gcs':       return <Gcs />;
       case 'auto':      return <Auto />;
       case 'gtest':     return <GroundTest />;
-      case 'bench':     return <Bench />;
+      case 'bench':     return null;   // 常驻挂载 (见 <main>), 切走不卸载防丢连接/running
       case 'profile':   return <FlightProfile />;
       case 'tilts':     return <Tilts />;
       case 'geometry':  return <Geometry />;
       case 'plot':      return <Plot />;
       case 'yawtune':   return <YawTune />;
       case 'map':       return <Map />;
-      case 'rtk':       return <RtkSetup />;
+      case 'rtk':       return null;   // 常驻挂载 (见 <main>)
       case 'loganalysis': return <LogAnalysis />;
       case 'params':    return <Params />;
       default: return <Gcs />;
@@ -296,8 +296,14 @@ export default function App() {
       </nav>
 
       {/* Main: 直接用 grid 布局, 不走 ScaledCanvas (用户反馈 16:9 缩放更怪) */}
-      <main className="flex-1 overflow-auto p-4 fade-in" key={currentTab}>
-        {panel}
+      <main className="flex-1 overflow-auto p-4">
+        {/* 常驻挂载: Bench/RTK 切走只隐藏不卸载 → 连接/running/数据 + WS 订阅都不丢 */}
+        <div style={{ display: currentTab === 'bench' ? undefined : 'none' }}><Bench /></div>
+        <div style={{ display: currentTab === 'rtk' ? undefined : 'none' }}><RtkSetup /></div>
+        {/* 其余 tab: 切换 remount + fade-in (无长连接状态, 卸载无碍) */}
+        {currentTab !== 'bench' && currentTab !== 'rtk' && (
+          <div key={currentTab} className="fade-in">{panel}</div>
+        )}
       </main>
 
       {/* Footer */}
