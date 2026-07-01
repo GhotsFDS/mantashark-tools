@@ -675,6 +675,7 @@ class Bridge:
                                          hold=float(req.get('hold', 3.0)),
                                          ramp=float(req.get('ramp', 1.5)),
                                          ang_step=float(req.get('ang_step', 15.0)),
+                                         rest=float(req.get('rest', 0.0)),
                                          ge_plate=str(req.get('ge_plate', 'na')),
                                          mount_deg=float(req.get('mount_deg', 0.0)),
                                          note=str(req.get('note', '')))
@@ -683,7 +684,8 @@ class Bridge:
                         self.bench.estimate(req.get('profile', 'P0'),
                                             float(req.get('thr_min', 0.5)), float(req.get('thr_max', 0.8)),
                                             float(req.get('step', 0.1)), float(req.get('hold', 3.0)),
-                                            float(req.get('ramp', 1.5)), float(req.get('ang_step', 15.0)))
+                                            float(req.get('ramp', 1.5)), float(req.get('ang_step', 15.0)),
+                                            float(req.get('rest', 0.0)))
                 elif t == 'bench_stop':
                     if self.bench: self.bench.stop()
                 elif t == 'bench_abort':

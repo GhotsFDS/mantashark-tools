@@ -35,6 +35,7 @@ export function Bench() {
   const [hold, setHold] = useState(3.0);
   const [ramp, setRamp] = useState(1.5);
   const [angStep, setAngStep] = useState(15);   // 角度梯度步进 (deg, 范围从舵机限位读)
+  const [rest, setRest] = useState(0);          // 角度间隔 s (每角度扫完停机散热 + 电池压降恢复)
   // 本次运行标注 (运行前设定, 整跑恒定, 写入 CSV 每行)
   const [gePlate, setGePlate] = useState('na');   // 地效下表面: with/without/na
   const [mountDeg, setMountDeg] = useState(0);    // 机体安装俯仰角 (deg)
@@ -114,10 +115,10 @@ export function Bench() {
   useEffect(() => {
     if (running || !sel) return;
     const id = setTimeout(() => {
-      gcs.benchEstimate(sel, thrMin / 100, thrMax / 100, step / 100, hold, ramp, angStep);
+      gcs.benchEstimate(sel, thrMin / 100, thrMax / 100, step / 100, hold, ramp, angStep, rest);
     }, 500);
     return () => clearTimeout(id);
-  }, [sel, thrMin, thrMax, step, hold, ramp, angStep, running]);
+  }, [sel, thrMin, thrMax, step, hold, ramp, angStep, rest, running]);
 
   const onConnect = () => { connected ? gcs.benchDisconnect() : gcs.benchConnect(forcePort, shared ? forcePort : currPort); };
   const onStart = () => {
@@ -126,7 +127,7 @@ export function Bench() {
     if (ramp <= 0 || hold <= 0) { alert('ramp/hold 必须 > 0'); return; }
     if (!confirm(`开始 ${sel}: 油门 ${thrMin}→${thrMax}% 步进${step}%\n会 arm + 驱动电机, 确认台架固定/桨叶安全!`)) return;
     setRows([]); setCsvPath(null); setRunning(true);   // P2: 乐观置 running, bench_done 再纠正
-    gcs.benchStart(sel, thrMin/100, thrMax/100, step/100, hold, ramp, angStep, gePlate, mountDeg, note);
+    gcs.benchStart(sel, thrMin/100, thrMax/100, step/100, hold, ramp, angStep, rest, gePlate, mountDeg, note);
   };
 
   const exportCsv = () => {
@@ -203,6 +204,7 @@ export function Bench() {
             <label className="label">hold s<input type="number" step="0.5" value={hold} onChange={e => setHold(+e.target.value)} className="input w-full" disabled={running} /></label>
             <label className="label">缓升/降 s<input type="number" step="0.5" value={ramp} onChange={e => setRamp(+e.target.value)} className="input w-full" disabled={running} /></label>
             <label className="label">角度步进°<input type="number" step="1" min="1" value={angStep} onChange={e => setAngStep(+e.target.value)} className="input w-full" disabled={running} /></label>
+            <label className="label">角度间隔 s<input type="number" step="1" min="0" value={rest} onChange={e => setRest(+e.target.value)} className="input w-full" disabled={running} title="每个角度扫完后停机 N 秒: 电调散热 + 电池压降恢复 (记 phase=rest)" /></label>
           </div>
           <div className="text-[10px] text-fg-mute mb-1">每角度: 缓升{thrMin}%→hold→+{step}%→...→{thrMax}%→缓降0; 角度从舵机限位按{angStep}°扫</div>
           <div className="card-section">运行标注 (写入 CSV 每行)</div>

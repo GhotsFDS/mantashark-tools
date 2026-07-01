@@ -268,11 +268,11 @@ export class GcsClient {
   benchTare() { this.send({ type: 'bench_tare' }); }
   benchCal(cal: Record<number, number>) { this.send({ type: 'bench_cal', cal }); }
   benchStart(profile: string, thr_min = 0.5, thr_max = 0.8, step = 0.1, hold = 3.0, ramp = 1.5, ang_step = 15,
-             ge_plate = 'na', mount_deg = 0, note = '') {
-    this.send({ type: 'bench_start', profile, thr_min, thr_max, step, hold, ramp, ang_step, ge_plate, mount_deg, note });
+             rest = 0, ge_plate = 'na', mount_deg = 0, note = '') {
+    this.send({ type: 'bench_start', profile, thr_min, thr_max, step, hold, ramp, ang_step, rest, ge_plate, mount_deg, note });
   }
-  benchEstimate(profile: string, thr_min: number, thr_max: number, step: number, hold: number, ramp: number, ang_step: number) {
-    this.send({ type: 'bench_estimate', profile, thr_min, thr_max, step, hold, ramp, ang_step });
+  benchEstimate(profile: string, thr_min: number, thr_max: number, step: number, hold: number, ramp: number, ang_step: number, rest = 0) {
+    this.send({ type: 'bench_estimate', profile, thr_min, thr_max, step, hold, ramp, ang_step, rest });
   }
   benchStop() { this.send({ type: 'bench_stop' }); }
   benchAbort() { this.send({ type: 'bench_abort' }); }

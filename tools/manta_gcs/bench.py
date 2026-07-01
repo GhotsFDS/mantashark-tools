@@ -225,7 +225,7 @@ class BenchManager:
 
     # ── 矩阵执行 (后端线程自主跑) ──
     def start(self, profile_key, thr_min=0.5, thr_max=0.8, step=0.1,
-              hold=3.0, ramp=1.5, ang_step=15.0,
+              hold=3.0, ramp=1.5, ang_step=15.0, rest=0.0,
               ge_plate='na', mount_deg=0.0, note=''):
         if not _OK or profile_key not in PROFILES:
             self.emit('bench_status', {'error': f'无 profile {profile_key}'}); return
@@ -243,12 +243,12 @@ class BenchManager:
         self._abort.clear()
         self._stopping = False
         self._run_thread = threading.Thread(
-            target=self._run_loop, args=(profile_key, thr_min, thr_max, step, hold, ramp, ang_step),
+            target=self._run_loop, args=(profile_key, thr_min, thr_max, step, hold, ramp, ang_step, rest),
             daemon=True)
         self._run_thread.start()
 
     # 估算: 读限位算准确角度数 + 总时长 (前端选 profile/改参数时调; 后台线程不阻塞)
-    def estimate(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step):
+    def estimate(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step, rest=0.0):
         if not _OK or profile_key not in PROFILES:
             return
         if step <= 0 or ang_step <= 0 or thr_min > thr_max:
@@ -258,11 +258,11 @@ class BenchManager:
         if self._est_thread and self._est_thread.is_alive():
             return   # P2: 并发 estimate 守护 (防线程堆积)
         self._est_thread = threading.Thread(target=self._estimate_work,
-                         args=(profile_key, thr_min, thr_max, step, hold, ramp, ang_step),
+                         args=(profile_key, thr_min, thr_max, step, hold, ramp, ang_step, rest),
                          daemon=True)
         self._est_thread.start()
 
-    def _estimate_work(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step):
+    def _estimate_work(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step, rest=0.0):
         prof = PROFILES[profile_key]
         ladder_n = len(self._ladder(thr_min, thr_max, step))
         total_cfg = 0; n_fixed = 0; n_sweep = 0; detail = []
@@ -279,7 +279,7 @@ class BenchManager:
                 total_cfg += 1; n_fixed += 1
         if n_fixed:   # 不扫角度的 (P0 单涵道 / P2 / P8/P9 差动) 是固定配置, 不是"角度"
             detail.insert(0, f'{n_fixed}个固定配置')
-        per_angle = (ramp + 0.5) + ladder_n * (ramp + hold) + (ramp + 0.3)
+        per_angle = (ramp + 0.5) + ladder_n * (ramp + hold) + (ramp + 0.3) + rest
         est = round(1 + total_cfg * per_angle)
         # cfg_kind: 'angle' 有角度梯度 / 'fixed' 全固定配置(涵道/差动档) / 'mixed'
         kind = 'angle' if n_sweep and not n_fixed else ('fixed' if n_fixed and not n_sweep else 'mixed')
@@ -350,7 +350,7 @@ class BenchManager:
                 f'[{env[0]},{env[1]}] — 已校准可忽略; 未校准请先标 LMIN/LMAX 再扫 (防扫进止档)'})
         return self._angle_ladder(lo, hi, ang_step)
 
-    def _run_loop(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step):
+    def _run_loop(self, profile_key, thr_min, thr_max, step, hold, ramp, ang_step, rest=0.0):
         prof = PROFILES[profile_key]
         pts = prof.points          # SweepPoint 列表
         ladder = self._ladder(thr_min, thr_max, step)
@@ -432,7 +432,7 @@ class BenchManager:
             total_angles = sum(len(g) for _, g in grids)
             total_steps = total_angles * len(ladder)
             # 时间估计: 每角度 = 舵机到位(ramp+0.5) + 油门档数×(缓升ramp+hold) + 缓降(ramp+0.3)
-            per_angle = (ramp + 0.5) + len(ladder) * (ramp + hold) + (ramp + 0.3)
+            per_angle = (ramp + 0.5) + len(ladder) * (ramp + hold) + (ramp + 0.3) + rest
             est_sec = 1.0 + total_angles * per_angle
             self.emit('bench_status', {
                 'msg': f'开始 {profile_key}: {total_angles}角度 × {len(ladder)}油门档, 预计 {est_sec/60:.1f}min',
@@ -477,6 +477,10 @@ class BenchManager:
                     self._set('BPT_THR_A', 0)
                     ab, _ = record(ramp + 0.3, 0, 'ramp_dn', ap, cur_ang, hard=False)
                     if ab: break
+                    # 角度间隔: 电机停 rest 秒 (电调散热 + 电池压降恢复); 记录看恢复 (phase=rest, thr=0)
+                    if rest > 0:
+                        ab, _ = record(rest, 0, 'rest', ap, cur_ang)
+                        if ab: break
                 if self._abort.is_set() or self._stopping: break
         finally:
             graceful = self._stopping and not self._abort.is_set()
