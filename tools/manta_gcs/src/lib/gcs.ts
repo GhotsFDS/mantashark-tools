@@ -24,8 +24,8 @@ export type GcsMessage =
   | { type: 'rtk_ports'; ports?: { device: string; description: string; manufacturer: string; vid: number | null; pid: number | null }[]; error?: string }
   | { type: 'rtk_sourcetable'; entries?: { mountpoint: string; identifier: string; format: string; format_details: string; carrier: string; nav_system: string; country: string }[]; error?: string }
   | { type: 'bench_profiles'; profiles: { key: string; name: string; desc: string; points: number }[] }
-  | { type: 'bench_status'; msg?: string; error?: string; connected?: boolean; running?: boolean; force_ok?: number; curr_ok?: number; csv?: string; est_sec?: number }
-  | { type: 'bench_live'; force_g: Record<string, number | null>; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; current: Record<string, number>; i_total: number; volt_L: number; volt_R: number; power: number }
+  | { type: 'bench_status'; msg?: string; error?: string; connected?: boolean; running?: boolean; force_ok?: number; curr_ok?: number; csv?: string; est_sec?: number; recording?: boolean; rec_path?: string; rec_rows?: number }
+  | { type: 'bench_live'; force_g: Record<string, number | null>; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; current: Record<string, number>; i_total: number; volt_L: number; volt_R: number; power: number; airspeed?: number; press_diff?: number; recording?: boolean; rec_rows?: number }
   | { type: 'bench_sample'; force_g: Record<string, number | null>; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; current: Record<string, number>; i_total: number; volt_L: number; volt_R: number; power: number }
   | { type: 'bench_point'; idx: number; total: number; profile: string; label: string; angle_idx: number; angle_total: number; thr_pct: number; lift_g: number; thrust_g: number; lift_N: number; thrust_N: number; roll_m: number; pitch_m: number; yaw_m: number; volt_L: number; volt_R: number; i_total: number; power: number; elapsed_sec: number; remain_sec: number }
   | { type: 'bench_done'; profile: string; aborted: boolean; stopped?: boolean; csv: string }
@@ -276,6 +276,11 @@ export class GcsClient {
   }
   benchStop() { this.send({ type: 'bench_stop' }); }
   benchAbort() { this.send({ type: 'bench_abort' }); }
+  // 副翼被动记录 (只读测力+空速, 不驱动电机)
+  benchRecordStart(pitch_deg: number, ail_diff: string, note = '') {
+    this.send({ type: 'bench_record_start', pitch_deg, ail_diff, note });
+  }
+  benchRecordStop() { this.send({ type: 'bench_record_stop' }); }
 
   isConnected() { return this.connected && this.ws?.readyState === WebSocket.OPEN; }
 

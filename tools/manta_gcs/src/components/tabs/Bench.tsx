@@ -40,6 +40,11 @@ export function Bench() {
   const [gePlate, setGePlate] = useState('na');   // 地效下表面: with/without/na
   const [mountDeg, setMountDeg] = useState(0);    // 机体安装俯仰角 (deg)
   const [note, setNote] = useState('');           // 自由备注
+  // 副翼被动记录 (只读测力+空速, 不驱动电机; 副翼用 servo preview 调)
+  const [recPitch, setRecPitch] = useState(8);    // 升力面俯仰角 (deg) — 进文件名
+  const [recDiff, setRecDiff] = useState('');     // 副翼差动状态 (自由文本 如 L15R-15) — 进文件名
+  const [recNote, setRecNote] = useState('');
+  const [recording, setRecording] = useState(false);
   // 后端按实际限位算的估算 (角度数/点数/总时长/明细)
   const [est, setEst] = useState<{ total_angles: number; total_steps: number; est_sec: number; detail: string; cfg_kind: string } | null>(null);
   const [live, setLive] = useState<Live | null>(null);
@@ -87,6 +92,7 @@ export function Bench() {
             setSensorMsg(m.connected ? `已连 (力${m.force_ok ?? '?'}/6 电流${m.curr_ok ?? '?'}/12)` : '未连接');
           }
           if (typeof m.running === 'boolean') setRunning(m.running);
+          if (typeof m.recording === 'boolean') setRecording(m.recording);
           if (m.csv) setCsvPath(m.csv);
         }
       } else if (m.type === 'bench_live' || m.type === 'bench_sample') {
@@ -106,8 +112,12 @@ export function Bench() {
         addLog(`⚠ ${m.msg}`);   // P3: WS 断/错误反馈 (之前静默)
       }
     });
-    // 订阅 servo 流 (通道预览)
-    if (gcs.isConnected()) gcs.send({ type: 'set_msg_interval', msgid: 36, hz: 10 });
+    // 订阅 servo 流 (通道预览) + 空速/动压 (副翼测试, VFR_HUD=74 / SCALED_PRESSURE=29)
+    if (gcs.isConnected()) {
+      gcs.send({ type: 'set_msg_interval', msgid: 36, hz: 10 });
+      gcs.send({ type: 'set_msg_interval', msgid: 74, hz: 5 });
+      gcs.send({ type: 'set_msg_interval', msgid: 29, hz: 5 });
+    }
     return off;
   }, [sel, forcePort]);
 
@@ -249,6 +259,22 @@ export function Bench() {
           <button className="btn btn-primary w-full" onClick={exportCsv} disabled={!rows.length}>⬇ 导出 CSV ({rows.length})</button>
           {csvPath && <div className="text-[10px] text-fg-mute mt-2 break-all">后端原始(10Hz): {csvPath}</div>}
         </div>
+
+        {/* 副翼被动记录 — 只读测力+空速, 不驱动电机 (副翼用下方 servo preview 调差动) */}
+        <div className="card">
+          <div className="card-title">副翼被动记录 {recording && <span className="text-accent animate-pulse">● REC {live?.rec_rows ?? 0}行</span>}</div>
+          <div className="text-[10px] text-fg-mute mb-2 leading-snug">只读测力台+空速, 不驱动电机. 副翼插倾转涵道通道, 用下方 preview 调左右差动. 停止时按俯仰角+差动命名导出.</div>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <label className="label">升力面俯仰角°<input type="number" step="1" value={recPitch} onChange={e => setRecPitch(+e.target.value)} className="input w-full" disabled={recording} /></label>
+            <label className="label">副翼差动<input type="text" value={recDiff} onChange={e => setRecDiff(e.target.value)} placeholder="L15R-15" className="input w-full" disabled={recording} /></label>
+          </div>
+          <label className="label block mb-2">备注<input type="text" value={recNote} onChange={e => setRecNote(e.target.value)} placeholder="风速等" className="input w-full" disabled={recording} /></label>
+          {!recording ? (
+            <button className="btn btn-primary w-full" onClick={() => gcs.benchRecordStart(recPitch, recDiff, recNote)} disabled={!connected}>● 开始记录</button>
+          ) : (
+            <button className="btn btn-warn w-full" onClick={() => gcs.benchRecordStop()}>■ 停止记录 ({live?.rec_rows ?? 0} 行)</button>
+          )}
+        </div>
       </div>
 
       {/* 右: 实时 */}
@@ -279,6 +305,19 @@ export function Bench() {
             </div>
           ))}
         </div>
+        {/* 空速 + 动压 (副翼测试, FC pitot → mavbridge) */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="card text-center !p-2">
+            <div className="text-[10px] text-fg-mute">空速 (pitot)</div>
+            <div className="text-xl font-bold val-mono text-accent">{live?.airspeed != null ? live.airspeed.toFixed(1) : '--'}</div>
+            <div className="text-[10px] text-fg-mute">m/s</div>
+          </div>
+          <div className="card text-center !p-2">
+            <div className="text-[10px] text-fg-mute">动压 Δp</div>
+            <div className="text-xl font-bold val-mono">{live?.press_diff != null ? live.press_diff.toFixed(2) : '--'}</div>
+            <div className="text-[10px] text-fg-mute">hPa</div>
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <div className="card">
             <div className="card-title">力 6 通道 (g)</div>
@@ -301,33 +340,32 @@ export function Bench() {
             </div>
           </div>
         </div>
+        {/* 通道输出预览 (SERVO) — 挪到右列, 跟左列副翼记录卡并排 */}
+        <div className="card">
+          <div className="card-title">通道输出预览 (12 EDF + 9 倾转)</div>
+          <div className="grid grid-cols-3 gap-x-4 gap-y-1">
+            {SERVO_CH.map(([idx, name, grp]) => {
+              const v = servo[idx] ?? 0;
+              const pct = v <= 0 ? 0 : grp === 'M'
+                ? Math.max(0, Math.min(100, (v - 800) / 14))
+                : Math.max(0, Math.min(100, (v - 500) / 20));
+              return (
+                <div key={idx} className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-fg-mute w-12 shrink-0 truncate">{name}</span>
+                  <div className="h-1.5 bg-panel-2 rounded overflow-hidden flex-1 min-w-0">
+                    <div className={'h-full ' + (grp === 'M' ? 'bg-accent' : 'bg-ks')} style={{ width: pct + '%' }} />
+                  </div>
+                  <span className="val-mono text-[10px] w-9 text-right">{v || '—'}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
         <div ref={logRef} className="card h-32 overflow-auto !p-2 font-mono text-[10px] leading-relaxed">
           {log.map((l, i) => <div key={i} className="text-fg-mute">{l}</div>)}
         </div>
       </div>
      </div>
-
-      {/* 通道输出预览 (SERVO, 从 GCS tab 复制) */}
-      <div className="card">
-        <div className="card-title">通道输出预览 (12 EDF + 9 倾转)</div>
-        <div className="grid grid-cols-3 gap-x-4 gap-y-1">
-          {SERVO_CH.map(([idx, name, grp]) => {
-            const v = servo[idx] ?? 0;
-            const pct = v <= 0 ? 0 : grp === 'M'
-              ? Math.max(0, Math.min(100, (v - 800) / 14))
-              : Math.max(0, Math.min(100, (v - 500) / 20));
-            return (
-              <div key={idx} className="flex items-center gap-1.5">
-                <span className="text-[10px] text-fg-mute w-12 shrink-0 truncate">{name}</span>
-                <div className="h-1.5 bg-panel-2 rounded overflow-hidden flex-1 min-w-0">
-                  <div className={'h-full ' + (grp === 'M' ? 'bg-accent' : 'bg-ks')} style={{ width: pct + '%' }} />
-                </div>
-                <span className="val-mono text-[10px] w-9 text-right">{v || '—'}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }

@@ -69,12 +69,15 @@ def profile_list():
 
 
 class BenchManager:
-    def __init__(self, mav, emit, get_voltage=None, get_param=None, get_battery=None):
+    def __init__(self, mav, emit, get_voltage=None, get_param=None, get_battery=None,
+                 get_air=None):
         self.mav = mav                 # mavutil connection
         self.emit = emit               # emit(type_str, dict) → WS (线程安全)
         self.get_voltage = get_voltage or (lambda: 0.0)
         self.get_battery = get_battery or (lambda: {})   # P0: 双电池 {id:V} (L=0 R=1)
         self.get_param = get_param or (lambda n: None)   # 读飞控 param 缓存 (TLT_ 限位)
+        # 副翼测试用: 空速/动压 (VFR_HUD.airspeed + SCALED_PRESSURE.press_diff, 经 mavbridge)
+        self.get_air = get_air or (lambda: {'airspeed': 0.0, 'press_diff': 0.0})
         self.bus = None                # Bus485 (共总线) 或 None
         self.force = None              # 双口模式
         self.curr = None
@@ -91,6 +94,11 @@ class BenchManager:
         self._meta = {'ge_plate': 'na', 'mount_deg': 0.0, 'note': ''}   # 运行级元数据 (start 覆盖)
         self.cal = {ch: 1.0 for ch in range(1, 7)}    # 力 N/count
         self.tare = {ch: 0.0 for ch in range(1, 7)}
+        # 副翼被动记录器 (只读测力+空速, 不驱动电机). 挂在 _live_loop 上写 CSV.
+        self._rec_lock = threading.Lock()
+        self._rec_f = None; self._rec_w = None
+        self._rec_n = 0; self._rec_t0 = 0.0; self._rec_path = ''
+        self._rec_meta = {}
 
     # ── 传感器连接 (共总线 force_port==curr_port → Bus485) ──
     def connect_sensors(self, force_port, curr_port, baud=115200):
@@ -122,6 +130,7 @@ class BenchManager:
             self.emit('bench_status', {'error': f'连接失败: {ex}'})
 
     def disconnect_sensors(self):
+        self.record_stop()
         self.abort()
         self._live_stop.set()
         if self._live_thread:
@@ -198,6 +207,9 @@ class BenchManager:
             cur = [cc.get(i+1) or 0.0 for i in range(12)]
             itot = sum(cur)
             vL, vR, power = self._power(cur)
+            air = self.get_air() or {}
+            aspd = air.get('airspeed') or 0.0
+            pdiff = air.get('press_diff') or 0.0
             self.emit('bench_live', {
                 'force_g': {k: (None if f_g[k] is None else round(f_g[k], 1)) for k in f_g},
                 'lift_g': round(lift_g,1), 'thrust_g': round(thrust_g,1),
@@ -206,8 +218,65 @@ class BenchManager:
                 'current': {DUCT_NAMES[i]: round(cur[i],1) for i in range(12)},
                 'i_total': round(itot,1), 'volt_L': round(vL,2), 'volt_R': round(vR,2),
                 'power': round(power, 0),
+                'airspeed': round(aspd, 2), 'press_diff': round(pdiff, 3),
+                'recording': self._rec_f is not None, 'rec_rows': self._rec_n,
             })
+            self._rec_write(f_g, lift_N, thrust_N, rollm, pitchm, yawm, aspd, pdiff)
             time.sleep(0.2)
+
+    # ── 副翼被动记录器 (只读测力+空速, 不驱动电机) ──
+    def record_start(self, pitch_deg=0, ail_diff='', note=''):
+        """开始记录 live 测力+空速到 CSV. 文件名带升力面俯仰角 + 副翼差动状态."""
+        with self._rec_lock:
+            if self._rec_f is not None:
+                self.emit('bench_status', {'error': '已在记录中, 先停止'}); return
+            logs = APP_DIR / 'logs'
+            try: logs.mkdir(parents=True, exist_ok=True)
+            except Exception: pass
+            ts = time.strftime('%Y%m%d_%H%M%S')
+            safe = lambda s: str(s).replace('/', '-').replace(' ', '').replace(',', '')[:24]
+            fn = f'aileron_{ts}_pitch{safe(pitch_deg)}_diff{safe(ail_diff)}.csv'
+            path = logs / fn
+            try:
+                self._rec_f = open(path, 'w', newline='', encoding='utf-8')
+            except Exception as ex:
+                self.emit('bench_status', {'error': f'开文件失败: {ex}'}); return
+            self._rec_w = csv.writer(self._rec_f)
+            self._rec_w.writerow(['t_s', 'airspeed_ms', 'press_diff_hPa',
+                'V_L_g', 'V_R_g', 'V_aft_g', 'H_L_g', 'H_R_g', 'H_aft_g',
+                'lift_N', 'thrust_N', 'roll_Nm', 'pitch_Nm', 'yaw_Nm',
+                'pitch_deg', 'ail_diff', 'note'])
+            self._rec_n = 0; self._rec_t0 = time.time(); self._rec_path = str(path)
+            self._rec_meta = {'pitch_deg': pitch_deg, 'ail_diff': ail_diff, 'note': note}
+        self.emit('bench_status', {'msg': f'▶ 记录开始 {fn}', 'recording': True})
+
+    def _rec_write(self, f_g, lift_N, thrust_N, rollm, pitchm, yawm, aspd, pdiff):
+        if self._rec_f is None: return
+        with self._rec_lock:
+            if self._rec_w is None: return
+            gv = lambda k: (None if f_g.get(k) is None else round(f_g[k], 1))
+            try:
+                self._rec_w.writerow([round(time.time() - self._rec_t0, 2),
+                    round(aspd, 2), round(pdiff, 3),
+                    gv('V_L'), gv('V_R'), gv('V_aft'), gv('H_L'), gv('H_R'), gv('H_aft'),
+                    round(lift_N, 2), round(thrust_N, 2),
+                    round(rollm, 3), round(pitchm, 3), round(yawm, 3),
+                    self._rec_meta.get('pitch_deg', ''), self._rec_meta.get('ail_diff', ''),
+                    self._rec_meta.get('note', '')])
+                self._rec_n += 1
+            except Exception:
+                pass
+
+    def record_stop(self):
+        with self._rec_lock:
+            if self._rec_f is None:
+                self.emit('bench_status', {'recording': False}); return
+            try: self._rec_f.close()
+            except Exception: pass
+            n = self._rec_n; path = self._rec_path
+            self._rec_f = None; self._rec_w = None
+        self.emit('bench_status', {'msg': f'■ 记录停止: {n} 行 → {path}',
+                                   'recording': False, 'rec_path': path, 'rec_rows': n})
 
     # ── BPT_ param 下发 (P1: 串行化, 多线程并发 send 不安全) ──
     def _set(self, name, val):

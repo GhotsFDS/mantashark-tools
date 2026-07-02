@@ -234,6 +234,9 @@ class Bridge:
         # 电池缓存 — ArduPilot BATTERY_STATUS 偶尔发 current=-1 (该帧未读到), 保持上次有效值防跳变
         self.last_battery_current = None
         self.last_battery_voltage = 0
+        # 副翼台架测试: 空速 (VFR_HUD.airspeed m/s) + 动压 (SCALED_PRESSURE.press_diff hPa)
+        self.last_airspeed = 0.0
+        self.last_press_diff = 0.0
         # P0 修: 双电池电压缓存 (id→V). 用户左右分路 L/R 各一块电池, 飞控发两个 BATTERY_STATUS.
         # raw 重构后 last_battery_voltage 不再更新(死缓存) → bench 功率恒0. 这里重新缓存.
         self.batt_voltages = {}   # {battery_id: voltage_V}
@@ -290,6 +293,8 @@ class Bridge:
                 get_voltage=lambda: self.last_battery_voltage,
                 get_battery=lambda: dict(self.batt_voltages),   # P0: 双电池 {id:V}
                 get_param=lambda n: self.fc_params.get(n),
+                get_air=lambda: {'airspeed': self.last_airspeed,
+                                 'press_diff': self.last_press_diff},
             )
 
     def _broadcast_thread(self, type_str, data_dict):
@@ -341,6 +346,13 @@ class Bridge:
                         self.last_battery_voltage = v
                 except Exception:
                     pass
+            # 副翼台架: 空速 + 动压 (bench 记录用; raw 透传不冲突)
+            elif t == 'VFR_HUD':
+                try: self.last_airspeed = float(m.airspeed)
+                except Exception: pass
+            elif t == 'SCALED_PRESSURE':
+                try: self.last_press_diff = float(m.press_diff)   # hPa (mbar)
+                except Exception: pass
 
             # ═══ 纯 raw 透传架构: 遥测一律 {type:'mav', mt, f}, GCS 自己解析 ═══
             # 保留服务端必须处理的: mission 协议状态机 (RPC 支持) / RTK rover tap / STATUSTEXT utf-8.
@@ -690,6 +702,12 @@ class Bridge:
                     if self.bench: self.bench.stop()
                 elif t == 'bench_abort':
                     if self.bench: self.bench.abort()
+                elif t == 'bench_record_start':
+                    if self.bench:
+                        self.bench.record_start(req.get('pitch_deg', 0),
+                                                req.get('ail_diff', ''), req.get('note', ''))
+                elif t == 'bench_record_stop':
+                    if self.bench: self.bench.record_stop()
                 elif t == 'bench_list_ports':
                     try:
                         ports = [{'device': d, 'description': desc}
